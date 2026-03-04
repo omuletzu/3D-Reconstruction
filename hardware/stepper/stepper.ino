@@ -1,13 +1,14 @@
-#include <Stepper.h>
+#include <AccelStepper.h>
 
-const int totalRevolutionSteps = 2048;
+#define MotorInterfaceType 4
 
 const int stepsPerMove = 114;
 
-Stepper stepper(stepsPerRevolution, 8, 10, 9, 11);
+AccelStepper stepper(MotorInterfaceType, 8, 10, 9, 11);
 
 void setup() {
-  stepper.setSpeed(15);
+  stepper.setMaxSpeed(1000.0);
+  stepper.setAcceleration(500.0);
 
   Serial.begin(9600);
 }

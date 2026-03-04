@@ -1,2 +1,6 @@
 pyserial
 opencv-python
+tensorflow
+numpy
+matplotlib
+kagglehub

@@ -3,10 +3,11 @@ import time
 import threading
 import queue
 import cv2
-import numpy as np
 from hardware.camera import Camera
 from hardware.stepper import ArduinoController
 from vision2d.processing import fix_distorsion, remove_background, enhance_contrast
+
+from tensorflow.keras.models import load_model
 
 processing_queue = queue.Queue()
 
@@ -15,8 +16,6 @@ processed_data = {}
 lock = threading.Lock()
 
 def thread_worker():
-    sift = cv2.SIFT_create()
-
     while True:
         item = processing_queue.get()
 
@@ -39,13 +38,14 @@ def thread_worker():
 
         image = enhance_contrast(image)
 
-        kp, desc = sift.detectAndCompute(image, None)
+        fast = cv2.FastFeatureDetector_create(threshold=30)
+
+        keypoints = fast.detect(image, None)
 
         with lock:
             processed_data[idx] = {
                 'image': image,
-                'keypoints': kp,
-                'descriptors': desc
+                'keypoints': keypoints,
             }
 
         print(f"[THREAD] Processed image {idx}")
@@ -58,6 +58,7 @@ def main():
     CAMERA_INDEX = 1
     TOTAL_PHOTOS = 18
     DATA_FOLDER = 'data/raw_captures'
+    CALIBRATION_FILE = 'hardware/camera_params.json'
 
     THREADS_NR = 8
 
@@ -68,6 +69,9 @@ def main():
 
     arduino = ArduinoController(port=ARDUINO_PORT)
     camera = Camera(camera_index=CAMERA_INDEX)
+
+    if not os.path.exists(CALIBRATION_FILE):
+        camera.calibrate_camera()
 
     threads = []
 
