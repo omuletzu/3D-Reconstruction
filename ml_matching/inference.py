@@ -13,7 +13,7 @@ def load_model(model_path):
 
   return model
 
-def extract_features(img, model):
+def extract_patches(img, model):
   patch_size = 32
   half_p = patch_size // 2
 
@@ -42,13 +42,13 @@ def extract_features(img, model):
     patches.append(patch)
     valid_keypoints.append(kp)
 
+  return valid_keypoints, np.array(patches)
+
+def compute_descriptors_for_patches(patches, model):
   if len(patches) == 0:
-    return [], None
-
-  np_patches = np.array(patches)
-  predictions = model.predict(np_patches, verbose=0)
-
-  return valid_keypoints, predictions
+    return None
+   
+  return model.predict(patches, verbose=0)
 
 def match_images(desc1, kp1, desc2, kp2):
     MAX_MATCHES = 1000
