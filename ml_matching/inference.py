@@ -1,3 +1,5 @@
+import config
+
 import cv2
 import numpy as np
 from ml_matching.arhitecture import build_model
@@ -13,11 +15,15 @@ def load_model(model_path):
 
   return model
 
-def extract_patches(img, model):
-  patch_size = 32
+def extract_patches(img):
+  patch_size = config.PATCH_SIZE
   half_p = patch_size // 2
 
   fast = cv2.FastFeatureDetector_create(threshold=30, nonmaxSuppression=True)
+
+  if len(img.shape) == 3:
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
   keypoints = fast.detect(img, None)
 
   valid_keypoints = []
@@ -51,7 +57,7 @@ def compute_descriptors_for_patches(patches, model):
   return model.predict(patches, verbose=0)
 
 def match_images(desc1, kp1, desc2, kp2):
-    MAX_MATCHES = 1000
+    MAX_MATCHES = config.MAX_MATCHES
 
     bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
 

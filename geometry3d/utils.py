@@ -1,7 +1,24 @@
+import config
+
 import numpy as np
 
+def save_point_cloud_ply(points_3d, filename=config.SAVE_POINT_CLOUD_PATH):
+    with open(filename, 'w') as f:
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write(f"element vertex {len(points_3d)}\n")
+        f.write("property float x\n")
+        f.write("property float y\n")
+        f.write("property float z\n")
+        f.write("end_header\n")
+        
+        for pt in points_3d:
+            f.write(f"{pt[0]} {pt[1]} {pt[2]}\n")
+
+    print(f"Point cloud saved at {filename}")
+
 def extract_extrinsics_E(E):
-    U, S, Vt = np.linalg.svd(E)
+    U, _, Vt = np.linalg.svd(E)
 
     if np.linalg.det(U) < 0:
         U = -U
@@ -54,13 +71,11 @@ def get_best_solution(solutions, pts1, pts2, K):
     best_R, best_t = None, None
 
     max_count = 0
-    best_3d_points = []
 
     for R, t in solutions:
         P2 = np.hstack((R, t))
 
         count = 0
-        current_3d_points = []
 
         for i in range(len(pts1)):
             pt1_homogeneus = np.array([pts1[i, 0], pts1[i, 1], 1.0])
@@ -79,12 +94,10 @@ def get_best_solution(solutions, pts1, pts2, K):
 
             if z1 > 0 and z2 > 0:
                 count += 1
-                current_3d_points.append(pt_3d)
 
         if count > max_count:
             max_count = count
             best_R = R
             best_t = t
-            best_3d_points = current_3d_points
 
-    return best_R, best_t, np.array(best_3d_points)
+    return best_R, best_t

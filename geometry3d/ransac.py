@@ -1,3 +1,5 @@
+import config
+
 import numpy as np
 import random
 
@@ -33,13 +35,13 @@ def eight_points_algorithm(pts1, pts2):
 
     return E_corrected
 
-def ransac(pts1, pts2, K, max_iters=1000, threshold=0.01):
+def ransac(pts1, pts2, K, max_iters=config.RANSAC_MAX_ITERS, threshold=config.RANSAC_THRESHOLD):
     pts1_normalized = normalize_points(pts1, K)
     pts2_normalized = normalize_points(pts2, K)
 
     N = pts1_normalized.shape[0]
 
-    E = None
+    best_E = None
     best_inliers_idx = []
     max_inliers_count = 0
 
@@ -65,7 +67,7 @@ def ransac(pts1, pts2, K, max_iters=1000, threshold=0.01):
         if len(inliers_current) > max_inliers_count:
             max_inliers_count = len(inliers_current)
             best_inliers_idx = inliers_current
-            E = E_current
+            best_E = E_current
 
     if max_inliers_count >= 8:
         pts1_best = pts1_normalized[best_inliers_idx]
