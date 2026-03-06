@@ -77,13 +77,14 @@ def mvs_pipeline(images, global_poses, K, all_3d_points):
     mesh = volume.extract_triangle_mesh()
     mesh.compute_vertex_normals()
 
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(all_3d_points)
+    if len(all_3d_points) > 10:
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(all_3d_points)
 
-    bbox = pcd.get_axis_aligned_bounding_box()
+        bbox = pcd.get_axis_aligned_bounding_box()
 
-    bbox.scale(1.2, bbox.get_center())
+        bbox.scale(1.2, bbox.get_center())
 
-    mesh = mesh.crop(bbox)
+        mesh = mesh.crop(bbox)
 
     return mesh
