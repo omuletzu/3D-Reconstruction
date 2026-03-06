@@ -7,12 +7,14 @@ import queue
 import cv2
 import json
 import numpy as np
+import open3d as o3d
 from hardware.camera import Camera
 from hardware.stepper import ArduinoController
 from vision2d.processing import fix_distorsion, remove_background, enhance_contrast
 from ml_matching.inference import extract_patches, compute_descriptors_for_patches, match_images, load_model
 from geometry3d.ransac import ransac
 from geometry3d.utils import extract_extrinsics_E, get_best_solution, triangulate_points, save_point_cloud_ply
+from geometry3d.mvs_dense import mvs_pipeline
 
 processing_queue = queue.Queue()
 
@@ -51,6 +53,7 @@ def thread_worker():
 
         with lock:
             processed_data[idx] = {
+                'image': image,
                 'keypoints': keypoints,
                 'patches': patches,
                 'descriptors': None
@@ -253,7 +256,30 @@ def main():
 
                 all_3d_points.append(pt_3d)
 
-        print(f"[MAIN] Reconstruction done with {len(all_3d_points)} points")   
+        print(f"[MAIN] Reconstruction done with {len(all_3d_points)} points")
+
+        print(f"[MVS] Starting dense reconstruction")
+
+        loaded_images = []
+
+        for i in range(config.TOTAL_PHOTOS):
+            if i in processed_data and 'image' in processed_data[i]:
+                loaded_images.append(processed_data[i]['image'])
+            else:
+                print(f"[MVS] Image data {i} missing")
+
+        if len(loaded_images) > 1:
+            dense_mesh = mvs_pipeline(loaded_images, global_poses, K, all_3d_points)
+
+            dense_model_path = os.path.join(config.DATA_FOLDER, "mvs_final_dens.ply")
+
+            o3d.io.write_triangle_mesh(dense_model_path, dense_mesh)
+
+            print(f"[MVS] Dense mesh saved at {dense_model_path}")
+
+            o3d.visualization.draw_geometries([dense_mesh])
+        else:
+            print("[MVS] Not enough images found")
 
     finally:
         arduino.close()

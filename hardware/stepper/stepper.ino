@@ -1,27 +1,29 @@
 #include <AccelStepper.h>
 
-#define MotorInterfaceType 4
+#define STEP_PIN 2
+#define DIR_PIN 5
 
-const int stepsPerMove = 114;
+AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 
-AccelStepper stepper(MotorInterfaceType, 8, 10, 9, 11);
+const int stepsPerMove = 10; 
 
 void setup() {
-  stepper.setMaxSpeed(1000.0);
-  stepper.setAcceleration(500.0);
+  stepper.setMaxSpeed(500.0);
+  stepper.setAcceleration(250.0);
 
   Serial.begin(9600);
 }
 
 void loop() {
-  if(Serial.available() > 0) {
+  if (Serial.available() > 0) {
     char cmd = Serial.read();
 
-    if(cmd == 'R' || cmd == 'r') {
-      stepper.step(stepsPerMove);
-
+    if (cmd == 'R' || cmd == 'r') {
+      stepper.move(stepsPerMove);
+      stepper.runToPosition();
+      
       delay(750);
-
+      
       Serial.println("D");
     }
   }

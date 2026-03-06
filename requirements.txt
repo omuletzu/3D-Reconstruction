@@ -4,3 +4,4 @@ tensorflow
 numpy
 matplotlib
 kagglehub
+open3d

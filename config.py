@@ -4,7 +4,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 ARDUINO_PORT = 'COM3'
 CAMERA_INDEX = 1
-TOTAL_PHOTOS = 18
+TOTAL_PHOTOS = 20
 
 DATA_FOLDER = os.path.join(BASE_DIR, 'data', 'raw_captures')
 CALIBRATION_FILE = os.path.join(BASE_DIR, 'hardware', 'camera_params.json')
