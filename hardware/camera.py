@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 import json
 import glob
+import os
+import config
 
 class Camera:
     def __init__(self, camera_index=0):
@@ -14,7 +16,7 @@ class Camera:
             print("Cannot access USB camera")
 
     def calibrate_camera(self):
-        BOARD_SIZE = (7, 6)
+        BOARD_SIZE = (8, 6)
 
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
@@ -25,10 +27,17 @@ class Camera:
         objpoints = [] 
         imgpoints = []
 
-        images = glob.glob('/calibration_data/*.jpg')
+        images = glob.glob('data/calibration_data/*.jpg')
 
         for fname in images:
+            print(f"[CALIBRATION] Processing {fname}...", end=" ")
+
             img = cv2.imread(fname)
+
+            h, w = img.shape[:2]
+            if w > config.MAX_WIDTH_CALIBRATION:
+                scale = config.MAX_WIDTH_CALIBRATION / w
+                img = cv2.resize(img, (int(w * scale), int(h * scale)))
 
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -41,12 +50,16 @@ class Camera:
                 
                 imgpoints.append(corners_detailed)
 
+                print("Corners found")
+            else:
+                print("Corners not found")
+
         ret, mtx, dist, _, _ = cv2.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
 
         if ret:
             calib_results = {
-                'camera_matrix': mtx.toList(),
-                'distortion_params': dist.toList()
+                'camera_matrix': mtx.tolist(),
+                'distortion_params': dist.tolist()
             }
 
             with open('camera_params.json', 'w') as f:

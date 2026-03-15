@@ -4,300 +4,154 @@ import os
 import time
 import threading
 import queue
-import cv2
 import json
 import numpy as np
-import open3d as o3d
+import pickle
+import cv2
 from hardware.camera import Camera
 from hardware.stepper import ArduinoController
-from vision2d.processing import fix_distorsion, remove_background, enhance_contrast
-from ml_matching.inference import extract_patches, compute_descriptors_for_patches, match_images, load_model
-from geometry3d.ransac import ransac
-from geometry3d.utils import extract_extrinsics_E, get_best_solution, triangulate_points, save_point_cloud_ply
-from geometry3d.mvs_dense import mvs_pipeline
+from ml_matching.inference import load_model
+from workers.preprocessing_worker import preprocessing_worker
+from workers.matching_worker import matching_worker
+from workers.geometry_worker import geometry_worker
+from geometry3d.global_reconstruction import global_reconstruction
 
-processing_queue = queue.Queue()
-
-ml_queue = queue.Queue()
+preprocessing_queue = queue.Queue()
+matching_queue = queue.Queue()
+geometry_queue = queue.Queue()
 
 processed_data = {}
-
 all_matches = {}
-
 lock = threading.Lock()
 
-def thread_worker():
-    while True:
-        item = processing_queue.get()
+def serialize_keypoints(kp_list):
+    return [(kp.pt[0], kp.pt[1], kp.size, kp.angle, kp.response, kp.octave, kp.class_id) for kp in kp_list]
 
-        if item is None:
-            break
-
-        path, idx = item
-
-        print(f"[THREAD] Processing image {idx} - {path}")
-
-        image = cv2.imread(path)
-
-        if image is None:
-            processing_queue.task_done()
-            continue
-
-        image = fix_distorsion(image)
-
-        image = remove_background(image)
-
-        image = enhance_contrast(image)
-
-        keypoints, patches = extract_patches(image)
-
-        with lock:
-            processed_data[idx] = {
-                'image': image,
-                'keypoints': keypoints,
-                'patches': patches,
-                'descriptors': None
-            }
-
-        ml_queue.put(idx)
-
-        print(f"[THREAD] Processed image {idx}")
-        
-        processing_queue.task_done()
-
-def ml_and_matching_worker(model, K):
-    while True:
-        idx = ml_queue.get()
-
-        if idx is None:
-            break
-
-        print(f"[ML THREAD] infering for image {idx}")
-
-        patches = processed_data[idx]['patches']
-
-        descriptors = compute_descriptors_for_patches(patches, model)
-
-        with lock:
-            processed_data[idx]['descriptors'] = descriptors
-
-        neighbours_to_check = [
-            (idx - 2) % config.TOTAL_PHOTOS,
-            (idx - 1) % config.TOTAL_PHOTOS,
-            (idx + 1) % config.TOTAL_PHOTOS,
-            (idx + 2) % config.TOTAL_PHOTOS
-        ]
-
-        for neighbour in neighbours_to_check:
-            if neighbour == (idx + 1) % config.TOTAL_PHOTOS or neighbour == (idx + 2) % config.TOTAL_PHOTOS:
-                img_A, img_B = idx, neighbour
-            else:
-                img_A, img_B = neighbour, idx
-
-            pair_name = f"{img_A}_{img_B}"
-
-            with lock:
-                if pair_name in all_matches:
-                    continue
-
-                ready_A = (img_A in processed_data) and (processed_data[img_A].get('descriptors') is not None)
-
-                ready_B = (img_B in processed_data) and (processed_data[img_B].get('descriptors') is not None)
-
-                ready = ready_A and ready_B
-
-            if ready:
-                print(f"[MATCHING] Starting for {pair_name}")
-
-                descA = processed_data[img_A]['descriptors']
-                kpA = processed_data[img_A]['keypoints']
-
-                descB = processed_data[img_B]['descriptors']
-                kpB = processed_data[img_B]['keypoints']
-
-                ptsA, ptsB = match_images(descA, kpA, descB, kpB)
-
-                print(f"[GEOMETRY] Ransac for {pair_name}")
-
-                E, ptsA_filt, ptsB_filt = ransac(ptsA, ptsB, K)
-
-                solutions = extract_extrinsics_E(E)
-
-                R_local, t_local = get_best_solution(solutions, ptsA_filt, ptsB_filt, K)
-
-                with lock:
-                    all_matches[pair_name] = {
-                        'ptsA': ptsA_filt,
-                        'ptsB': ptsB_filt,
-                        'R_local': R_local,
-                        't_local': t_local
-                    }
-
-                print(f"[MATCHING] Done for {pair_name}")
-
-        ml_queue.task_done()
+def deserialize_keypoints(kp_data):
+    return [cv2.KeyPoint(x=d[0], y=d[1], size=d[2], angle=d[3], response=d[4], octave=d[5], class_id=d[6]) for d in kp_data]
 
 def main():
+    global processed_data, all_matches
+
     if not os.path.exists(config.DATA_FOLDER):
         os.makedirs(config.DATA_FOLDER)
 
     print("Hardware initialization")
 
-    arduino = ArduinoController(port=config.ARDUINO_PORT)
-    camera = Camera(camera_index=config.CAMERA_INDEX)
+    # arduino = ArduinoController(port=config.ARDUINO_PORT)
+    # camera = Camera(camera_index=config.CAMERA_INDEX)
 
-    if not os.path.exists(config.CALIBRATION_FILE):
-        camera.calibrate_camera()
+    # if not os.path.exists(config.CALIBRATION_FILE):
+    #     camera.calibrate_camera()
 
     with open(config.CALIBRATION_FILE, 'r') as f:
         cam_data = json.load(f)
 
-        K = np.array(cam_data['K'])
+        K = np.array(cam_data['camera_matrix'])
 
     model = load_model(config.MODEL_PATH)
 
-    threads = []
+    preprocessing_threads = []
+    matching_threads = []
+    geometry_threads = []
 
-    for _ in range(config.THREADS_NR):
-        t = threading.Thread(target=thread_worker)
+    if config.USE_CACHE and os.path.exists(config.CACHE_PATH):
+        with open(config.CACHE_PATH, "rb") as f:
+            cached_data = pickle.load(f)
+            
+        all_matches.update(cached_data["all_matches"])
+        
+        loaded_p_data = cached_data["processed_data"]
 
-        t.start()
+        for idx in loaded_p_data:
+            if 'keypoints' in loaded_p_data[idx] and loaded_p_data[idx]['keypoints'] is not None:
+                loaded_p_data[idx]['keypoints'] = deserialize_keypoints(loaded_p_data[idx]['keypoints'])
+        
+        processed_data.update(loaded_p_data)
+        K = cached_data["K"]
 
-        threads.append(t)
+    else:
+        model = load_model(config.MODEL_PATH)
 
-    ml_threads = []
+        for _ in range(config.PREPROCESSING_THREADS_NR):
+            t = threading.Thread(target=preprocessing_worker,
+                                args=(preprocessing_queue, lock, processed_data, matching_queue))
+            t.start()
+            preprocessing_threads.append(t)
 
-    for _ in range(config.ML_THREADS_NR):
-        t = threading.Thread(target=ml_and_matching_worker, args=(model, K))
+        for _ in range(config.ML_THREADS_NR):
+            t = threading.Thread(target=matching_worker, 
+                                args=(model, matching_queue, processed_data, lock, all_matches, geometry_queue))
+            t.start()
+            matching_threads.append(t)
 
-        t.start()
-
-        ml_threads.append(t)
+        for _ in range(config.GEOMETRY_THREADS_NR):
+            t = threading.Thread(target=geometry_worker, 
+                                args=(K, geometry_queue, lock, all_matches))
+            t.start()
+            geometry_threads.append(t)
 
     time.sleep(2)
 
     print("Started photo scanning")
 
+    # try:
+    #     for i in range(config.TOTAL_PHOTOS):
+    #         print(f"Capturing frame {i}")
+
+    #         if arduino.rotate_step():
+    #             time.sleep(0.5)
+
+    #             image = camera.captura_frame()
+
+    #             if image:
+    #                 image_file_path = os.path.join(config.DATA_FOLDER, f"photo_{i}.${config.DATA_FOLDER_IMAGES_EXTENSION}")
+
+    #                 cv2.imwrite(image_file_path, image)
+
+    #                 preprocessing_queue.put((image_file_path, i))
+
+    #                 print(f"Saved image {i}")
+    #             else:
+    #                 print(f"Error capturing frame {i}")
+    #         else:
+    #             print(f"Error arduino stepper")
+
     try:
-        for i in range(config.TOTAL_PHOTOS):
-            print(f"Capturing frame {i}")
+        if not (config.USE_CACHE and os.path.exists(config.CACHE_PATH)):
+            print("Started photo scanning")
+            for i in range(config.TOTAL_PHOTOS):
+                image_file_path = os.path.join(config.DATA_FOLDER, f"templeSR{(i + 1):04d}.{config.DATA_FOLDER_IMAGES_EXTENSION}")
+                preprocessing_queue.put((image_file_path, i))
 
-            if arduino.rotate_step():
-                time.sleep(0.5)
+            print("Waiting for threads to finish...")
+            preprocessing_queue.join()
+            matching_queue.join()
+            geometry_queue.join()
 
-                image = camera.captura_frame()
+            save_ready_processed_data = {}
+            for idx, data in processed_data.items():
+                save_ready_processed_data[idx] = data.copy()
+                if 'keypoints' in data and data['keypoints'] is not None:
+                    save_ready_processed_data[idx]['keypoints'] = serialize_keypoints(data['keypoints'])
 
-                if image:
-                    image_file_path = os.path.join(config.DATA_FOLDER, f"photo_{i}.jpg")
-
-                    cv2.imwrite(image_file_path, image)
-
-                    processing_queue.put((image_file_path, i))
-
-                    print(f"Saved image {i}")
-                else:
-                    print(f"Error capturing frame {i}")
-            else:
-                print(f"Error arduino stepper")
-
-        print("Waiting for threads to finish")
-        processing_queue.join()
-
-        print("Waiting for ML threads to finish")
-        ml_queue.join()
-
-        all_3d_points = []
-
-        global_poses = {}
-
-        global_poses[0] = {
-            'R': np.eye(3),
-            't': np.zeros((3, 1))
-        }
-
-        for i in range(config.TOTAL_PHOTOS - 1):
-            pair_name = f"{i}_{i + 1}"
-
-            match_data = all_matches.get(pair_name)
-
-            if match_data is None:
-                print(f"[CHAINING] pair_name is missing")
-                continue 
-
-            R_local = match_data['R_local']
-            t_local = match_data['t_local']
-            pts1 = match_data['ptsA']
-            pts2 = match_data['ptsB']
-
-            R_prev = global_poses[i]['R']
-            t_prev = global_poses[i]['t']
-
-            R_global = R_local @ R_prev
-            t_global = R_local @ t_prev + t_local
-
-            global_poses[i + 1] = {
-                'R': R_global,
-                't': t_global
+            data_to_save = {
+                "all_matches": dict(all_matches),
+                "processed_data": save_ready_processed_data,
+                "K": K
             }
 
-            P1 = np.hstack((R_prev, t_prev))
-            P2 = np.hstack((R_global, t_global))
+            with open(config.CACHE_PATH, "wb") as f:
+                pickle.dump(data_to_save, f)
 
-            K_inv = np.linalg.inv(K)
-
-            for j in range(len(pts1)):
-                pt1_homogeneus = np.array([pts1[j, 0], pts1[j, 1], 1.0])
-                pt2_homogeneus = np.array([pts2[j, 0], pts2[j, 1], 1.0])
-
-                pt1_normalized = K_inv @ pt1_homogeneus
-                pt2_normalized = K_inv @ pt2_homogeneus
-
-                pt_3d = triangulate_points(pt1_normalized, pt2_normalized, P1, P2)
-
-                all_3d_points.append(pt_3d)
-
-        print(f"[MAIN] Reconstruction done with {len(all_3d_points)} points")
-
-        print(f"[MVS] Starting dense reconstruction")
-
-        loaded_images = []
-
-        for i in range(config.TOTAL_PHOTOS):
-            if i in processed_data and 'image' in processed_data[i]:
-                loaded_images.append(processed_data[i]['image'])
-            else:
-                print(f"[MVS] Image data {i} missing")
-
-        if len(loaded_images) > 1:
-            dense_mesh = mvs_pipeline(loaded_images, global_poses, K, all_3d_points)
-
-            dense_model_path = os.path.join(config.DATA_FOLDER, "mvs_final_dens.ply")
-
-            o3d.io.write_triangle_mesh(dense_model_path, dense_mesh)
-
-            print(f"[MVS] Dense mesh saved at {dense_model_path}")
-
-            o3d.visualization.draw_geometries([dense_mesh])
-        else:
-            print("[MVS] Not enough images found")
+        global_reconstruction(all_matches, processed_data, K)
 
     finally:
-        arduino.close()
-        camera.close()
-
-        for _ in range(config.THREADS_NR):
-            processing_queue.put(None)
-
-        for t in threads:
-            t.join()
-
-        for _ in range(config.ML_THREADS_NR):
-            ml_queue.put(None)
-
-        for t in ml_threads:
-            t.join()
-
-        save_point_cloud_ply(all_3d_points)
+        for q, threads in [(preprocessing_queue, preprocessing_threads), 
+                          (matching_queue, matching_threads), 
+                          (geometry_queue, geometry_threads)]:
+            for _ in threads: q.put(None)
+            for t in threads: t.join()
 
 
 if __name__ == "__main__":

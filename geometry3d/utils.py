@@ -2,20 +2,45 @@ import config
 
 import numpy as np
 
-def save_point_cloud_ply(points_3d, filename=config.SAVE_POINT_CLOUD_PATH):
+def save_to_ply(filename, points_3d, global_poses=None):
+
+    print(f"[PLY] Saving point cloud to {filename}...")
+    
+    points = np.array(points_3d).reshape(-1, 3)
+
+    cam_centers = []
+    if global_poses is not None:
+        for cam_id, pose in global_poses.items():
+            R = pose['R']
+            t = pose['t']
+            
+            C = -np.matrix(R).T @ np.matrix(t)
+
+            cam_centers.append(np.array(C).flatten())
+            
+    num_points = len(points) + len(cam_centers)
+    
     with open(filename, 'w') as f:
         f.write("ply\n")
         f.write("format ascii 1.0\n")
-        f.write(f"element vertex {len(points_3d)}\n")
+        f.write(f"element vertex {num_points}\n")
         f.write("property float x\n")
         f.write("property float y\n")
         f.write("property float z\n")
+        f.write("property uchar red\n")
+        f.write("property uchar green\n")
+        f.write("property uchar blue\n")
         f.write("end_header\n")
         
-        for pt in points_3d:
-            f.write(f"{pt[0]} {pt[1]} {pt[2]}\n")
-
-    print(f"Point cloud saved at {filename}")
+        for p in points:
+            if np.any(np.isnan(p)) or np.any(np.isinf(p)):
+                continue
+            f.write(f"{p[0]} {p[1]} {p[2]} 200 200 200\n")
+            
+        for c in cam_centers:
+            f.write(f"{c[0]} {c[1]} {c[2]} 255 0 0\n")
+            
+    print(f"[PLY] Done")
 
 def extract_extrinsics_E(E):
     U, _, Vt = np.linalg.svd(E)

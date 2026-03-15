@@ -1,6 +1,7 @@
 import cv2
 import json
 import numpy as np
+from rembg import remove
 
 with open('data/camera_params.json', 'r') as f:
     params = json.load(f)
@@ -8,17 +9,19 @@ with open('data/camera_params.json', 'r') as f:
     D_params = np.array(params['distortion_params'])
 
 def fix_distorsion(image):
-    h, w = image.shape[:2]
+    return image
+    
+    # h, w = image.shape[:2]
 
-    new_camera_mtx, roi = cv2.getOptimalNewCameraMatrix(K_mtx, D_params, (w, h), 1, (w, h))
+    # new_camera_mtx, roi = cv2.getOptimalNewCameraMatrix(K_mtx, D_params, (w, h), 1, (w, h))
 
-    dst = cv2.undistort(image, K_mtx, D_params, None, new_camera_mtx)
+    # dst = cv2.undistort(image, K_mtx, D_params, None, new_camera_mtx)
 
-    x, y, w, h = roi
+    # x, y, w, h = roi
 
-    dst = dst[y : y + h, x : x + w]
+    # dst = dst[y : y + h, x : x + w]
 
-    return dst
+    # return dst
 
 def enhance_contrast(image):
     if len(image.shape) == 3:
@@ -32,16 +35,30 @@ def enhance_contrast(image):
 
     return enhanced_image
 
-def remove_background(image, reference_bg, threshold):
-    diff = cv2.absdiff(image, reference_bg)
+def remove_background(image):
+    h, w = image.shape[:2]
 
-    _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
+    margin_x = int(w * 0.02)
+    margin_y = int(h * 0.02)
 
-    kernel = np.ones((5, 5), np.uint8)
+    rect = (margin_x, margin_y, w - 2 * margin_x, h - 2 * margin_y)
 
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    mask = np.zeros(image.shape[:2], np.uint8)
+    bgdModel = np.zeros((1, 65), np.float64)
+    fgdModel = np.zeros((1, 65), np.float64)
 
-    result = cv2.bitwise_and(image, image, mask=mask)
+    cv2.grabCut(image, mask, rect, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_RECT)
+
+    binary_mask = np.where((mask == 2) | (mask == 0), 0, 1).astype('uint8')
+
+    result = cv2.bitwise_and(image, image, mask=binary_mask)
+
+    cv2.imshow('img', result)
+    cv2.waitKey(0)
+
+    return result
+
+def remove_background_ai(image):
+    result = remove(image)
 
     return result

@@ -29,13 +29,17 @@ def eight_points_algorithm(pts1, pts2):
 
     U_e, S_e, Vt_e = np.linalg.svd(E)
 
-    S_e[2] = 0.0
+    s_avg = (S_e[0] + S_e[1]) / 2.0
 
-    E_corrected = U_e @ np.diag(S_e) @ Vt_e
+    E_corrected = U_e @ np.diag([s_avg, s_avg, 0.0]) @ Vt_e
 
     return E_corrected
 
 def ransac(pts1, pts2, K, max_iters=config.RANSAC_MAX_ITERS, threshold=config.RANSAC_THRESHOLD):
+    if pts1.shape[0] < 8:
+        print(f"[RANSAC] Not enough points ({pts1.shape[0]}). Minimum 8 required.")
+        return None, None, None
+
     pts1_normalized = normalize_points(pts1, K)
     pts2_normalized = normalize_points(pts2, K)
 
