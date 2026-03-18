@@ -15,17 +15,43 @@ def load_model(model_path):
 
   return model
 
+def extract_features_adaptive(img, min_features=1000, max_features=10000):
+    if img is None:
+        return None, None
+
+    sift = cv2.SIFT_create(contrastThreshold=0.04)
+    kp, desc = sift.detectAndCompute(img, None)
+
+    if len(kp) < min_features:
+
+        sift_sensitive = cv2.SIFT_create(contrastThreshold=0.04, edgeThreshold=15)
+
+        kp, desc = sift_sensitive.detectAndCompute(img, None)
+
+    if len(kp) > max_features:
+
+        combined = list(zip(kp, desc))
+
+        combined.sort(key=lambda x: x[0].response, reverse=True)
+
+        combined = combined[:max_features]
+
+        kp, desc = zip(*combined)
+        kp = list(kp)
+        desc = np.array(desc)
+
+    return kp, desc
+
 def extract_patches(img):
     patch_size = config.PATCH_SIZE
     half_p = patch_size / 2.0
 
-    sift = cv2.SIFT_create(
-        nfeatures=20000, 
-        contrastThreshold=0.05
-    )
+    sift = cv2.SIFT_create(nfeatures=50000, contrastThreshold=0.005, edgeThreshold=20)
 
     if len(img.shape) == 3:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # keypoints, descriptors = extract_features_adaptive(img)
 
     keypoints = sift.detect(img, None)
 
@@ -57,6 +83,8 @@ def extract_patches(img):
 
     return valid_keypoints, np.array(patches)
 
+    # return valid_keypoints, np.array(patches), descriptors
+
 def compute_descriptors_for_patches(patches, model):
   if len(patches) == 0:
     return None
@@ -64,12 +92,10 @@ def compute_descriptors_for_patches(patches, model):
   return model.predict(patches, verbose=0)
 
 def match_images(desc1, kp1, desc2, kp2):
-
-    bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
-
     if desc1 is None or desc2 is None or len(desc1) < 2 or len(desc2) < 2:
         return np.array([]), np.array([]), [], []
 
+    bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
     raw_matches = bf.knnMatch(desc1, desc2, k=2)
 
     pts1 = []
@@ -88,22 +114,4 @@ def match_images(desc1, kp1, desc2, kp2):
             indices1.append(idx1)
             indices2.append(idx2)
 
-    pts1_np = np.float32(pts1)
-    pts2_np = np.float32(pts2)
-
-    if len(pts1_np) >= 8:
-        F, mask = cv2.findFundamentalMat(pts1_np, pts2_np, cv2.FM_RANSAC, 1.75, 0.999)
-
-        if mask is not None:
-            mask = mask.ravel() == 1
-            pts1_np = pts1_np[mask]
-            pts2_np = pts2_np[mask]
-            
-            indices1 = [indices1[i] for i in range(len(indices1)) if mask[i]]
-            indices2 = [indices2[i] for i in range(len(indices2)) if mask[i]]
-        else:
-            return np.array([]), np.array([]), [], []
-    else:
-        return np.array([]), np.array([]), [], []
-
-    return pts1_np, pts2_np, indices1, indices2
+    return np.float32(pts1), np.float32(pts2), indices1, indices2

@@ -1,4 +1,5 @@
 import config
+import cv2
 
 import numpy as np
 
@@ -41,6 +42,28 @@ def save_to_ply(filename, points_3d, global_poses=None):
             f.write(f"{c[0]} {c[1]} {c[2]} 255 0 0\n")
             
     print(f"[PLY] Done")
+
+def find_essential_mat(pts1, pts2, K):
+    # if len(pts1) < 8:
+    #     return None, None
+
+    # ransac_thresholds = [1.0, 2.0, 3.0]
+    ransac_thresholds = [1.5]
+    
+    for threshold in ransac_thresholds:
+
+        E, mask = cv2.findEssentialMat(
+            pts1, pts2, 
+            cameraMatrix=K, 
+            method=cv2.RANSAC, 
+            prob=0.999, 
+            threshold=threshold
+        )
+        
+        if mask is not None:
+            return E, mask                
+            
+    return None, None
 
 def extract_extrinsics_E(E):
     U, _, Vt = np.linalg.svd(E)

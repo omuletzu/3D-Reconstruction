@@ -3,7 +3,7 @@ import numpy as np
 from geometry3d.ransac import ransac
 from geometry3d.utils import extract_extrinsics_E, get_best_solution
 
-def geometry_worker(K, geometry_queue, lock, all_matches):
+def geometry_worker(geometry_queue, lock, all_matches):
     while True:
         item = geometry_queue.get()
 
@@ -18,6 +18,8 @@ def geometry_worker(K, geometry_queue, lock, all_matches):
         idA = item['indicesA']
         idB = item['indicesB']
 
+        K = item['K']
+
         print(f"[GEOMETRY] Ransac for {pair_name}")
 
         # E, ptsA_filt, ptsB_filt = ransac(ptsA, ptsB, K)
@@ -27,17 +29,29 @@ def geometry_worker(K, geometry_queue, lock, all_matches):
         # solutions = extract_extrinsics_E(E)
         # R_local, t_local = get_best_solution(solutions, ptsA_filt, ptsB_filt, K)
         
+        if ptsA is None or len(ptsA) < 8 or ptsB is None or len(ptsB) < 8:
+            with lock:
+                all_matches[pair_name] = "FAILED"
+
+            geometry_queue.task_done()
+
+            continue
+
         E, mask = cv2.findEssentialMat(
             ptsA, 
             ptsB, 
-            K, 
+            K,
             method=cv2.RANSAC, 
             prob=0.999, 
-            threshold=2.0 
+            threshold=2.5
         )
 
         if E is None or mask is None:
-            print(f"[GEOMETRY] Extracting E for {pair_name}")
+            print(f"[GEOMETRY] FAILED for {pair_name} - E not found")
+
+            with lock:
+                all_matches[pair_name] = "FAILED"
+            
             geometry_queue.task_done()
             continue
 

@@ -47,13 +47,30 @@ def main():
     with open(config.CALIBRATION_FILE, 'r') as f:
         cam_data = json.load(f)
 
-        K = np.array(cam_data['camera_matrix'])
+        K = None
+
+        if "camera_matrix" in cam_data:
+            K = np.array(cam_data['camera_matrix'])
+
+        dist_coeffs = None
+
+        if "distortion_params" in cam_data:
+            dist_coeffs = np.array(cam_data["distortion_params"], dtype=np.float32).reshape(-1, 1)
 
     model = load_model(config.MODEL_PATH)
 
     preprocessing_threads = []
     matching_threads = []
     geometry_threads = []
+
+    PIPELINE_HEIGHT = int(config.ORIGINAL_HEIGHT * (config.PIPELINE_WIDTH / config.ORIGINAL_WIDTH))
+    SCALE_FACTOR = config.PIPELINE_WIDTH / config.ORIGINAL_WIDTH
+
+    K_scaled = K.copy()
+    K_scaled[0, 0] *= SCALE_FACTOR
+    K_scaled[1, 1] *= SCALE_FACTOR
+    K_scaled[0, 2] *= SCALE_FACTOR
+    K_scaled[1, 2] *= SCALE_FACTOR
 
     if config.USE_CACHE and os.path.exists(config.CACHE_PATH):
         with open(config.CACHE_PATH, "rb") as f:
@@ -75,7 +92,7 @@ def main():
 
         for _ in range(config.PREPROCESSING_THREADS_NR):
             t = threading.Thread(target=preprocessing_worker,
-                                args=(preprocessing_queue, lock, processed_data, matching_queue))
+                                args=(preprocessing_queue, lock, processed_data, matching_queue, K_scaled, dist_coeffs))
             t.start()
             preprocessing_threads.append(t)
 
@@ -87,7 +104,7 @@ def main():
 
         for _ in range(config.GEOMETRY_THREADS_NR):
             t = threading.Thread(target=geometry_worker, 
-                                args=(K, geometry_queue, lock, all_matches))
+                                args=(geometry_queue, lock, all_matches))
             t.start()
             geometry_threads.append(t)
 
@@ -121,7 +138,7 @@ def main():
         if not (config.USE_CACHE and os.path.exists(config.CACHE_PATH)):
             print("Started photo scanning")
             for i in range(config.TOTAL_PHOTOS):
-                image_file_path = os.path.join(config.DATA_FOLDER, f"templeSR{(i + 1):04d}.{config.DATA_FOLDER_IMAGES_EXTENSION}")
+                image_file_path = os.path.join(config.DATA_FOLDER, f"{(i + 1):04d}.{config.DATA_FOLDER_IMAGES_EXTENSION}")
                 preprocessing_queue.put((image_file_path, i))
 
             print("Waiting for threads to finish...")
@@ -144,7 +161,9 @@ def main():
             with open(config.CACHE_PATH, "wb") as f:
                 pickle.dump(data_to_save, f)
 
-        global_reconstruction(all_matches, processed_data, K)
+        K_for_SfM = processed_data[0]['K']
+
+        global_reconstruction(all_matches, processed_data, K_for_SfM, dist_coeffs)
 
     finally:
         for q, threads in [(preprocessing_queue, preprocessing_threads), 

@@ -72,6 +72,9 @@ def run_scipy_bundle_adjustment(global_poses, ba_points_3d, ba_camera_indices, b
     
     t0 = time.time()
     
+    if np.any(np.isnan(x0)) or np.any(np.isinf(x0)):
+        x0 = np.nan_to_num(x0, nan=0.0, posinf=10000.0, neginf=-10000.0)
+
     res = least_squares(
         fun, 
         x0, 
@@ -133,7 +136,7 @@ def initialize_reconstruction(all_matches, K, cam1, cam2):
     pts0, pts1 = pair['ptsA'], pair['ptsB']
     idx0, idx1 = pair['indicesA'], pair['indicesB']
 
-    E, mask = cv2.findEssentialMat(pts0, pts1, K, method=cv2.RANSAC, prob=0.999, threshold=2.0)
+    E, mask = cv2.findEssentialMat(pts0, pts1, K, method=cv2.RANSAC, prob=0.999, threshold=1.5)
     _, R, t, mask_pose = cv2.recoverPose(E, pts0, pts1, K, mask=mask)
 
     global_poses = {
@@ -180,8 +183,8 @@ def find_3d_2d_correspondences(curr_cam, all_matches, track_map, global_points_3
         else:
             pair_name = pair_name_A
         
-        if not m or m == "PENDING" or len(m['ptsA']) == 0:
-            print(f"[PAIR] {look_back} & {curr_cam}: Matches not found in all_matches")
+        if not m or m == "PENDING" or m == "FAILED" or len(m['ptsA']) == 0:
+            # print(f"[PAIR] {look_back} & {curr_cam}: Matches not found in all_matches")
             continue
             
         total_matches = len(m['indicesA'])
@@ -212,20 +215,46 @@ def find_3d_2d_correspondences(curr_cam, all_matches, track_map, global_points_3
         
         print(f"[PAIR] {pair_name}: {total_matches} matches found. Only {found_in_track_map} are 3D anchors.")
 
-    print(f"[RESULT] Sending to PnP: {len(object_points)} unique points.")
+    if len(object_points) > 0:
+        print(f"[RESULT] Sending to PnP: {len(object_points)} unique points.")
+
     return np.array(object_points), np.array(image_points), tracking_info
 
-def estimate_camera_pose(obj_pts, img_pts, K):
-    if len(obj_pts) < 4: return False, None, None, None
+def estimate_camera_pose(obj_pts, img_pts, K, dist_coeffs=None):
+    if len(obj_pts) < 10: 
+        return False, None, None, None
+
+    if dist_coeffs is None:
+        dist_coeffs = np.zeros((4, 1), dtype=np.float32)
+
+    obj_pts_np = obj_pts.astype(np.float32)
+    img_pts_np = img_pts.astype(np.float32)
 
     success, rvec, tvec, inliers = cv2.solvePnPRansac(
-        obj_pts.astype(np.float32), 
-        img_pts.astype(np.float32), 
-        K, None, 
-        reprojectionError=25.0,
+        obj_pts_np, 
+        img_pts_np, 
+        K, 
+        dist_coeffs, 
+        reprojectionError=5.0, 
         iterationsCount=100000,
-        flags=cv2.SOLVEPNP_EPNP
+        flags=cv2.SOLVEPNP_EPNP 
     )
+    
+    if not success or inliers is None or len(inliers) < 15:
+        return False, None, None, None
+
+    inliers_obj = obj_pts_np[inliers.flatten()]
+    inliers_img = img_pts_np[inliers.flatten()]
+
+    cv2.solvePnPRefineLM(
+        inliers_obj, 
+        inliers_img, 
+        K, 
+        dist_coeffs, 
+        rvec, 
+        tvec
+    )
+
     return success, rvec, tvec, inliers
 
 def triangulate_new_points(curr_cam, global_poses, all_matches, track_map, global_points_3d, K, observations):
@@ -236,7 +265,7 @@ def triangulate_new_points(curr_cam, global_poses, all_matches, track_map, globa
         
         pair = all_matches.get(f"{prev_cam}_{curr_cam}")
         
-        if not pair or pair['ptsA'] is None or len(pair['ptsA']) == 0:
+        if not pair or pair == "FAILED" or 'ptsA' not in pair or pair['ptsA'] is None or len(pair['ptsA']) == 0:
             continue
 
         R_p, t_p = global_poses[prev_cam]['R'], global_poses[prev_cam]['t']
@@ -266,7 +295,7 @@ def triangulate_new_points(curr_cam, global_poses, all_matches, track_map, globa
                     err_p = np.linalg.norm(proj_p.flatten() - pair['ptsA'][k])
                     err_c = np.linalg.norm(proj_c.flatten() - pair['ptsB'][k])
                     
-                    if err_p < 15.0 and err_c < 15.0:
+                    if err_p < 8.0 and err_c < 8.0:
                         pt_idx = len(global_points_3d)
                         global_points_3d.append(pts3D_new[k])
                         track_map[(prev_cam, id_p)] = pt_idx
@@ -278,7 +307,7 @@ def triangulate_new_points(curr_cam, global_poses, all_matches, track_map, globa
                         count += 1
     return count
 
-def attempt_incremental_sfm(camA, camB, all_matches, processed_data, K):
+def attempt_incremental_sfm(camA, camB, all_matches, processed_data, K, dist_coeffs):
     print(f"[SEED] Start reconstruction chaining for {camA} - {camB} cameras")
     
     global_poses, global_points_3d, track_map, observations = initialize_reconstruction(all_matches, K, camA, camB)
@@ -313,9 +342,9 @@ def attempt_incremental_sfm(camA, camB, all_matches, processed_data, K):
         
         for candidate in camera_ranking:
             best_cam = candidate['cam_id']
-            success, rvec, tvec, inliers = estimate_camera_pose(candidate['obj_pts'], candidate['img_pts'], K)
+            success, rvec, tvec, inliers = estimate_camera_pose(candidate['obj_pts'], candidate['img_pts'], K, dist_coeffs)
 
-            if success and inliers is not None and len(inliers) >= 4:
+            if success and inliers is not None and len(inliers) >= 8:
                 R_curr, _ = cv2.Rodrigues(rvec)
                 global_poses[best_cam] = {'R': R_curr, 't': tvec}
                 pnp_success_for_this_round = True
@@ -331,7 +360,8 @@ def attempt_incremental_sfm(camA, camB, all_matches, processed_data, K):
                         pair = all_matches.get(f"{best_cam}_{prev_cam}")
                         is_reverse = True
                     
-                    if not pair or pair['ptsA'] is None or len(pair['ptsA']) == 0: continue
+                    if not pair or pair == "FAILED" or 'ptsA' not in pair or pair['ptsA'] is None or len(pair['ptsA']) == 0:
+                        continue
                     
                     for k in range(len(pair['indicesA'])):
                         if is_reverse:
@@ -367,13 +397,13 @@ def attempt_incremental_sfm(camA, camB, all_matches, processed_data, K):
     return global_poses, global_points_3d
 
 
-def global_reconstruction(all_matches, processed_data, K):
+def global_reconstruction(all_matches, processed_data, K, dist_coeffs=None):
 
     seed_ranking = []
 
     for pair_name, m in all_matches.items():
 
-        if m == "PENDING" or not m or len(m['ptsA']) < 100:
+        if m == "PENDING" or m == "FAILED" or not m or len(m['ptsA']) < 15:
             continue
 
         seed_ranking.append({
@@ -388,7 +418,7 @@ def global_reconstruction(all_matches, processed_data, K):
 
     max_cameras_registered = 0
     
-    MAX_SEEDS_TO_TRY = 5
+    MAX_SEEDS_TO_TRY = 10
     seeds_tried = 0
     
     for seed in seed_ranking:
@@ -397,7 +427,7 @@ def global_reconstruction(all_matches, processed_data, K):
             
         camA, camB = map(int, seed['pair_name'].split('_'))
         
-        poses, points = attempt_incremental_sfm(camA, camB, all_matches, processed_data, K)
+        poses, points = attempt_incremental_sfm(camA, camB, all_matches, processed_data, K, dist_coeffs)
         
         num_registered = len(poses)
 
@@ -429,7 +459,7 @@ def global_reconstruction(all_matches, processed_data, K):
     loaded_images_colored = []
 
     for i in range(config.TOTAL_PHOTOS):
-        if i in processed_data and 'image_gray' in processed_data[i] and 'image_color':
+        if i in processed_data and 'image_gray' in processed_data[i] and 'image_color' in processed_data[i]:
             loaded_images.append(processed_data[i]['image_gray'])
             loaded_images_colored.append(processed_data[i]['image_color'])
         else:

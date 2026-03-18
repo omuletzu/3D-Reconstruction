@@ -17,55 +17,56 @@ class Camera:
 
     def calibrate_camera(self):
         BOARD_SIZE = (8, 6)
-
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
         objp = np.zeros((BOARD_SIZE[0] * BOARD_SIZE[1], 3), np.float32)
-
         objp[:, :2] = np.mgrid[0 : BOARD_SIZE[0], 0 : BOARD_SIZE[1]].T.reshape(-1, 2)
 
         objpoints = [] 
         imgpoints = []
 
         images = glob.glob('data/calibration_data/*.jpg')
+        
+        if not images:
+            print("[CALIBRATION] Folder not found")
+            return
+
+        gray_shape = None
 
         for fname in images:
             print(f"[CALIBRATION] Processing {fname}...", end=" ")
-
             img = cv2.imread(fname)
 
-            h, w = img.shape[:2]
-            if w > config.MAX_WIDTH_CALIBRATION:
-                scale = config.MAX_WIDTH_CALIBRATION / w
-                img = cv2.resize(img, (int(w * scale), int(h * scale)))
-
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gray_shape = gray.shape[::-1]
 
-            ret, corners = cv2.findChessboardCorners(gray, (BOARD_SIZE[0], BOARD_SIZE[1]), None)
+            print(gray_shape)
+
+            ret, corners = cv2.findChessboardCorners(gray, BOARD_SIZE, None)
 
             if ret == True:
                 objpoints.append(objp)
-
-                corners_detailed = cv2.cornerSubPix(gray,corners, (11,11), (-1,-1), criteria)
-                
+                corners_detailed = cv2.cornerSubPix(gray, corners, (11,11), (-1,-1), criteria)
                 imgpoints.append(corners_detailed)
-
                 print("Corners found")
             else:
                 print("Corners not found")
 
-        ret, mtx, dist, _, _ = cv2.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
+        if len(imgpoints) > 0:
+            ret, mtx, dist, _, _ = cv2.calibrateCamera(objpoints, imgpoints, gray_shape, None, None)
 
-        if ret:
-            calib_results = {
-                'camera_matrix': mtx.tolist(),
-                'distortion_params': dist.tolist()
-            }
+            if ret:
+                calib_results = {
+                    'camera_matrix': mtx.tolist(),
+                    'distortion_params': dist.tolist()
+                }
 
-            with open('camera_params.json', 'w') as f:
-                json.dump(calib_results, f)
+                with open('camera_params.json', 'w') as f:
+                    json.dump(calib_results, f, indent=4)
 
-            print("Succesfully found intrinsec camera matrix and distorsion parameters")
+                print("[CALIBRATION] Done")
+        else:
+            print("[CALIBRATION] Failed")
 
 
     def captura_frame(self):

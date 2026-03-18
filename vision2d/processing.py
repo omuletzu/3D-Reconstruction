@@ -3,25 +3,34 @@ import json
 import numpy as np
 from rembg import remove
 
-with open('data/camera_params.json', 'r') as f:
-    params = json.load(f)
-    K_mtx = np.array(params['camera_matrix'])
-    D_params = np.array(params['distortion_params'])
+def resize_image(image, target_width):
+    if image is None:
+        return None
 
-def fix_distorsion(image):
-    return image
-    
-    # h, w = image.shape[:2]
+    original_height, original_width = image.shape[:2]
 
-    # new_camera_mtx, roi = cv2.getOptimalNewCameraMatrix(K_mtx, D_params, (w, h), 1, (w, h))
+    scale_factor = target_width / original_width
+    target_height = int(original_height * scale_factor)
 
-    # dst = cv2.undistort(image, K_mtx, D_params, None, new_camera_mtx)
+    resized_image = cv2.resize(image, (target_width, target_height), interpolation=cv2.INTER_AREA)
 
-    # x, y, w, h = roi
+    return resized_image
 
-    # dst = dst[y : y + h, x : x + w]
+def fix_distorsion(image, K, D):
+    h, w = image.shape[:2]
 
-    # return dst
+    new_camera_mtx, roi = cv2.getOptimalNewCameraMatrix(K, D, (w, h), 1, (w, h))
+
+    dst = cv2.undistort(image, K, D, None, new_camera_mtx)
+
+    x, y, w_roi, h_roi = roi
+    dst = dst[y : y + h_roi, x : x + w_roi]
+
+    final_K = new_camera_mtx.copy()
+    final_K[0, 2] -= x
+    final_K[1, 2] -= y
+
+    return dst, final_K
 
 def enhance_contrast(image):
     if len(image.shape) == 3:
@@ -29,7 +38,7 @@ def enhance_contrast(image):
     else:
         gray = image
 
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
 
     enhanced_image = clahe.apply(gray)
 
@@ -58,7 +67,14 @@ def remove_background(image):
 
     return result
 
-def remove_background_ai(image):
-    result = remove(image)
+import cv2
 
-    return result
+def remove_background_ai(image):
+
+    result_rgba = remove(image)
+
+    image_bgr = cv2.cvtColor(result_rgba, cv2.COLOR_RGBA2BGR)
+
+    ai_mask = result_rgba[:, :, 3]
+
+    return image_bgr, ai_mask

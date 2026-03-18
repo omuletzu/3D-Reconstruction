@@ -1,32 +1,36 @@
 import cv2
+import config
 import numpy as np
-from vision2d.processing import remove_background_ai, enhance_contrast, fix_distorsion
+from vision2d.processing import remove_background_ai, enhance_contrast, fix_distorsion, resize_image
 from ml_matching.inference import extract_patches
 
-def preprocessing_worker(preprocessing_queue, lock, processed_data, matching_queue):
+def preprocessing_worker(preprocessing_queue, lock, processed_data, matching_queue, K, D):
     while True:
         item = preprocessing_queue.get()
-        if item is None: break
+
+        if item is None: 
+            break
+
         path, idx = item
 
         image = cv2.imread(path)
+
         if image is None:
             preprocessing_queue.task_done()
             continue
 
-        image_undistorted = fix_distorsion(image)
+        image = resize_image(image, config.PIPELINE_WIDTH)
 
-        image_contrast = enhance_contrast(image_undistorted)
+        image_undistorted, K_final = fix_distorsion(image, K, D)
+
+        image_no_bg, ai_mask = remove_background_ai(image_undistorted)
+
+        image_contrast = enhance_contrast(image_no_bg)
 
         keypoints, patches = extract_patches(image_contrast)
 
-        image_no_bg = remove_background_ai(image_undistorted)
-        gray_no_bg = cv2.cvtColor(image_no_bg, cv2.COLOR_BGR2GRAY)
-        
-        _, raw_mask = cv2.threshold(gray_no_bg, 10, 255, cv2.THRESH_BINARY)
-
         kernel = np.ones((3, 3), np.uint8) 
-        safe_mask = cv2.erode(raw_mask, kernel, iterations=1)
+        safe_mask = cv2.erode(ai_mask, kernel, iterations=1)
 
         valid_keypoints = []
         valid_patches = []
@@ -44,11 +48,12 @@ def preprocessing_worker(preprocessing_queue, lock, processed_data, matching_que
 
         with lock:
             processed_data[idx] = {
-                'image_gray': cv2.cvtColor(image_no_bg, cv2.COLOR_BGR2GRAY),
+                'image_gray': image_contrast,
                 'image_color': image_no_bg,
                 'keypoints': valid_keypoints,
                 'patches': valid_patches,
-                'descriptors': None
+                'descriptors': None,
+                'K': K_final
             }
 
         matching_queue.put(idx)

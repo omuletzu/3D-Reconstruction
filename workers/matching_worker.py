@@ -25,11 +25,9 @@ def matching_worker(model, matching_queue, processed_data, lock, all_matches, ge
 
         with lock:
             processed_data[idx]['descriptors'] = descriptors
-
-        window_size = 4
         
         neighbours_to_check = []
-        for i in range(-window_size, window_size + 1):
+        for i in range(-config.MATCH_WINDOW_SIZE, config.MATCH_WINDOW_SIZE + 1):
             if i == 0: continue
             neighbours_to_check.append((idx + i) % config.TOTAL_PHOTOS)
 
@@ -70,7 +68,8 @@ def matching_worker(model, matching_queue, processed_data, lock, all_matches, ge
                     'ptsA': ptsA,
                     'ptsB': ptsB,
                     'indicesA': idA,
-                    'indicesB': idB
+                    'indicesB': idB,
+                    'K': processed_data[idx]['K']
                 })
 
                 print(f"[MATCHING] Done for {pair_name}")
