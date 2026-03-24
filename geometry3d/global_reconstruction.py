@@ -7,8 +7,8 @@ import time
 from scipy.optimize import least_squares
 from scipy.spatial import KDTree
 from scipy.sparse import lil_matrix
-from geometry3d.utils import triangulate_points, save_to_ply
-from geometry3d.mvs_dense import mvs_pipeline
+from geometry3d.utils import triangulate_points, save_to_ply, get_best_solution, extract_extrinsics_E
+from geometry3d.mvs_dense import mesh_reconstruction
 
 def bundle_adjustment_sparsity(n_cameras, n_points, camera_indices, point_indices):
     m = camera_indices.size * 2
@@ -137,7 +137,25 @@ def initialize_reconstruction(all_matches, K, cam1, cam2):
     idx0, idx1 = pair['indicesA'], pair['indicesB']
 
     E, mask = cv2.findEssentialMat(pts0, pts1, K, method=cv2.RANSAC, prob=0.999, threshold=1.5)
-    _, R, t, mask_pose = cv2.recoverPose(E, pts0, pts1, K, mask=mask)
+    # _, R, t, mask_pose = cv2.recoverPose(E, pts0, pts1, K, mask=mask)
+
+    solutions = extract_extrinsics_E(E)
+
+    mask = mask.ravel() > 0
+
+    pts0_filt1 = pts0[mask]
+    pts1_filt1 = pts1[mask]
+
+    idx0_filt1 = np.array(idx0)[mask]
+    idx1_filt1 = np.array(idx1)[mask]
+
+    R, t, ind_filt = get_best_solution(solutions, pts0_filt1, pts1_filt1, K)
+
+    pts0_final = pts0_filt1[ind_filt]
+    pts1_final = pts1_filt1[ind_filt]
+    
+    idx0_final = idx0_filt1[ind_filt]
+    idx1_final = idx1_filt1[ind_filt]
 
     global_poses = {
         cam1: {'R': np.eye(3), 't': np.zeros((3, 1))},
@@ -146,23 +164,24 @@ def initialize_reconstruction(all_matches, K, cam1, cam2):
 
     P0 = K @ np.hstack((np.eye(3), np.zeros((3, 1))))
     P1 = K @ np.hstack((R, t))
-    pts4D = cv2.triangulatePoints(P0, P1, pts0.T, pts1.T)
-    pts3D = (pts4D[:3, :] / pts4D[3, :]).T
+
+    # pts4D = cv2.triangulatePoints(P0, P1, pts0.T, pts1.T)
+    pts3D = triangulate_points(pts0_final, pts1_final, P0, P1)
 
     global_points_3d = []
     track_map = {} 
-    mask_pose = mask_pose.flatten()
+    mask = mask.flatten()
     observations = []
 
     for i in range(len(pts3D)):
-        if mask_pose[i]:
-            pt_idx = len(global_points_3d)
-            global_points_3d.append(pts3D[i])
-            track_map[(cam1, int(idx0[i]))] = pt_idx
-            track_map[(cam2, int(idx1[i]))] = pt_idx
+        pt_idx = len(global_points_3d)
+        global_points_3d.append(pts3D[i])
+        
+        track_map[(cam1, int(idx0_final[i]))] = pt_idx
+        track_map[(cam2, int(idx1_final[i]))] = pt_idx
 
-            observations.append((cam1, pt_idx, pts0[i][0], pts0[i][1]))
-            observations.append((cam2, pt_idx, pts1[i][0], pts1[i][1]))
+        observations.append((cam1, pt_idx, pts0_final[i][0], pts0_final[i][1]))
+        observations.append((cam2, pt_idx, pts1_final[i][0], pts1_final[i][1]))
 
     return global_poses, global_points_3d, track_map, observations
 
@@ -184,7 +203,6 @@ def find_3d_2d_correspondences(curr_cam, all_matches, track_map, global_points_3
             pair_name = pair_name_A
         
         if not m or m == "PENDING" or m == "FAILED" or len(m['ptsA']) == 0:
-            # print(f"[PAIR] {look_back} & {curr_cam}: Matches not found in all_matches")
             continue
             
         total_matches = len(m['indicesA'])
@@ -274,8 +292,7 @@ def triangulate_new_points(curr_cam, global_poses, all_matches, track_map, globa
         P_prev = K @ np.hstack((R_p, t_p))
         P_curr = K @ np.hstack((R_c, t_c))
 
-        pts4D = cv2.triangulatePoints(P_prev, P_curr, pair['ptsA'].T, pair['ptsB'].T)
-        pts3D_new = (pts4D[:3, :] / pts4D[3, :]).T
+        pts3D_new = triangulate_points(pair['ptsA'], pair['ptsB'], P_prev, P_curr)
 
         for k in range(len(pts3D_new)):
             id_p, id_c = int(pair['indicesA'][k]), int(pair['indicesB'][k])
@@ -452,7 +469,6 @@ def global_reconstruction(all_matches, processed_data, K, dist_coeffs=None):
         
     save_to_ply(config.SAVE_POINT_CLOUD_PATH, best_reconstruction_points, best_reconstruction_poses)
 
-
     print(f"[MVS] Starting dense reconstruction")
 
     loaded_images = []
@@ -466,7 +482,7 @@ def global_reconstruction(all_matches, processed_data, K, dist_coeffs=None):
             print(f"[MVS] Image data {i} missing")
 
     if len(loaded_images) > 1:
-        dense_mesh = mvs_pipeline(loaded_images, loaded_images_colored, best_reconstruction_poses, K, best_reconstruction_points)
+        dense_mesh = mesh_reconstruction(loaded_images, loaded_images_colored, best_reconstruction_poses, K, best_reconstruction_points)
 
         dense_model_path = os.path.join(config.DATA_FOLDER, "mvs_final_dense.ply")
 

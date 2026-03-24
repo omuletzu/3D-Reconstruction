@@ -104,7 +104,7 @@ def match_images(desc1, kp1, desc2, kp2):
     indices2 = []
 
     for m, n in raw_matches:
-        if m.distance < 0.8 * n.distance:
+        if m.distance < config.LOWE_VALUE * n.distance:
             idx1 = m.queryIdx
             idx2 = m.trainIdx
 

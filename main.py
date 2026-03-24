@@ -63,7 +63,6 @@ def main():
     matching_threads = []
     geometry_threads = []
 
-    PIPELINE_HEIGHT = int(config.ORIGINAL_HEIGHT * (config.PIPELINE_WIDTH / config.ORIGINAL_WIDTH))
     SCALE_FACTOR = config.PIPELINE_WIDTH / config.ORIGINAL_WIDTH
 
     K_scaled = K.copy()
@@ -138,7 +137,7 @@ def main():
         if not (config.USE_CACHE and os.path.exists(config.CACHE_PATH)):
             print("Started photo scanning")
             for i in range(config.TOTAL_PHOTOS):
-                image_file_path = os.path.join(config.DATA_FOLDER, f"{(i + 1):04d}.{config.DATA_FOLDER_IMAGES_EXTENSION}")
+                image_file_path = os.path.join(config.DATA_FOLDER, f"templeR{(i + 1):04d}.{config.DATA_FOLDER_IMAGES_EXTENSION}")
                 preprocessing_queue.put((image_file_path, i))
 
             print("Waiting for threads to finish...")

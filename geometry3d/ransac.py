@@ -78,4 +78,4 @@ def ransac(pts1, pts2, K, max_iters=config.RANSAC_MAX_ITERS, threshold=config.RA
         pts2_best = pts2_normalized[best_inliers_idx]
         best_E = eight_points_algorithm(pts1_best, pts2_best)
 
-    return best_E, pts1[best_inliers_idx], pts2[best_inliers_idx]
+    return best_E, best_inliers_idx
