@@ -8,7 +8,7 @@ from scipy.optimize import least_squares
 from scipy.spatial import KDTree
 from scipy.sparse import lil_matrix
 from geometry3d.utils import triangulate_points, save_to_ply, get_best_solution, extract_extrinsics_E
-from geometry3d.mvs_dense import mesh_reconstruction
+from geometry3d.mvs_dense import alpha_shapes_reconstruction, poisson_mesh_reconstruction
 
 def bundle_adjustment_sparsity(n_cameras, n_points, camera_indices, point_indices):
     m = camera_indices.size * 2
@@ -136,7 +136,7 @@ def initialize_reconstruction(all_matches, K, cam1, cam2):
     pts0, pts1 = pair['ptsA'], pair['ptsB']
     idx0, idx1 = pair['indicesA'], pair['indicesB']
 
-    E, mask = cv2.findEssentialMat(pts0, pts1, K, method=cv2.RANSAC, prob=0.999, threshold=1.5)
+    E, mask = cv2.findEssentialMat(pts0, pts1, K, method=cv2.RANSAC, prob=0.999, threshold=config.ESSENTIAL_MATRIX_THRESHOLD)
     # _, R, t, mask_pose = cv2.recoverPose(E, pts0, pts1, K, mask=mask)
 
     solutions = extract_extrinsics_E(E)
@@ -162,16 +162,36 @@ def initialize_reconstruction(all_matches, K, cam1, cam2):
         cam2: {'R': R, 't': t}
     }
 
-    P0 = K @ np.hstack((np.eye(3), np.zeros((3, 1))))
-    P1 = K @ np.hstack((R, t))
+    P0 = np.hstack((np.eye(3), np.zeros((3, 1))))
+    P1 = np.hstack((R, t))
+
+    K_inv = np.linalg.inv(K)
+    N_pts = len(pts0_final)
+
+    pts0_homo = np.hstack((pts0_final, np.ones((N_pts, 1))))
+    pts1_homo = np.hstack((pts1_final, np.ones((N_pts, 1))))
+
+    pts0_norm = (K_inv @ pts0_homo.T).T[:, :2]
+    pts1_norm = (K_inv @ pts1_homo.T).T[:, :2]
 
     # pts4D = cv2.triangulatePoints(P0, P1, pts0.T, pts1.T)
-    pts3D = triangulate_points(pts0_final, pts1_final, P0, P1)
+    # pts3D = (pts4D[:3, :] / pts4D[3, :]).T
+    pts3D = triangulate_points(pts0_norm, pts1_norm, P0, P1)
 
     global_points_3d = []
     track_map = {} 
     mask = mask.flatten()
     observations = []
+
+    # for i in range(len(pts3D)):
+    #     if mask_pose[i]:
+    #         pt_idx = len(global_points_3d)
+    #         global_points_3d.append(pts3D[i])
+    #         track_map[(cam1, int(idx0[i]))] = pt_idx
+    #         track_map[(cam2, int(idx1[i]))] = pt_idx
+
+    #         observations.append((cam1, pt_idx, pts0[i][0], pts0[i][1]))
+    #         observations.append((cam2, pt_idx, pts1[i][0], pts1[i][1]))
 
     for i in range(len(pts3D)):
         pt_idx = len(global_points_3d)
@@ -289,10 +309,25 @@ def triangulate_new_points(curr_cam, global_poses, all_matches, track_map, globa
         R_p, t_p = global_poses[prev_cam]['R'], global_poses[prev_cam]['t']
         R_c, t_c = global_poses[curr_cam]['R'], global_poses[curr_cam]['t']
 
-        P_prev = K @ np.hstack((R_p, t_p))
-        P_curr = K @ np.hstack((R_c, t_c))
+        P_prev = np.hstack((R_p, t_p))
+        P_curr = np.hstack((R_c, t_c))
 
-        pts3D_new = triangulate_points(pair['ptsA'], pair['ptsB'], P_prev, P_curr)
+        ptsA = pair['ptsA']
+        ptsB = pair['ptsB']
+        N_pts = len(ptsA)
+
+        K_inv = np.linalg.inv(K)
+
+        ptsA_hom = np.hstack((ptsA, np.ones((N_pts, 1))))
+        ptsB_hom = np.hstack((ptsB, np.ones((N_pts, 1))))
+
+        ptsA_norm = (K_inv @ ptsA_hom.T).T[:, :2]
+        ptsB_norm = (K_inv @ ptsB_hom.T).T[:, :2]
+
+        pts4D = cv2.triangulatePoints(P_prev, P_curr, ptsA_norm.T, ptsB_norm.T)
+        pts3D_new = (pts4D[:3, :] / pts4D[3, :]).T
+
+        # pts3D_new = triangulate_points(ptsA_norm, ptsB_norm, P_prev, P_curr)
 
         for k in range(len(pts3D_new)):
             id_p, id_c = int(pair['indicesA'][k]), int(pair['indicesB'][k])
@@ -469,27 +504,40 @@ def global_reconstruction(all_matches, processed_data, K, dist_coeffs=None):
         
     save_to_ply(config.SAVE_POINT_CLOUD_PATH, best_reconstruction_points, best_reconstruction_poses)
 
-    print(f"[MVS] Starting dense reconstruction")
+    pcd = o3d.geometry.PointCloud()
 
-    loaded_images = []
-    loaded_images_colored = []
+    pcd.points = o3d.utility.Vector3dVector(np.array(best_reconstruction_points))
 
-    for i in range(config.TOTAL_PHOTOS):
-        if i in processed_data and 'image_gray' in processed_data[i] and 'image_color' in processed_data[i]:
-            loaded_images.append(processed_data[i]['image_gray'])
-            loaded_images_colored.append(processed_data[i]['image_color'])
+    pcd.paint_uniform_color([0.7, 0.7, 0.7])
+
+    axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
+
+    o3d.visualization.draw_geometries([pcd, axes], window_name="Sparse Point Cloud")
+
+    if config.COMPUTE_MVS:
+        print(f"[MVS] Starting dense reconstruction")
+
+        loaded_images = []
+        loaded_images_colored = []
+
+        for i in range(config.TOTAL_PHOTOS):
+            if i in processed_data and 'image_gray' in processed_data[i] and 'image_color' in processed_data[i]:
+                loaded_images.append(processed_data[i]['image_gray'])
+                loaded_images_colored.append(processed_data[i]['image_color'])
+            else:
+                print(f"[MVS] Image data {i} missing")
+
+        if len(loaded_images) > 1:
+
+            if config.USE_ALPHA_SHAPES:
+                mesh = alpha_shapes_reconstruction(best_reconstruction_points)
+            else:
+                mesh = poisson_mesh_reconstruction(best_reconstruction_points)
+
+            o3d.io.write_triangle_mesh(config.SAVE_MESH_PATH, mesh)
+
+            print("[MVS] Mesh saved")
+
+            o3d.visualization.draw_geometries([mesh], window_name="Mesh", mesh_show_wireframe=True, mesh_show_back_face=True)
         else:
-            print(f"[MVS] Image data {i} missing")
-
-    if len(loaded_images) > 1:
-        dense_mesh = mesh_reconstruction(loaded_images, loaded_images_colored, best_reconstruction_poses, K, best_reconstruction_points)
-
-        dense_model_path = os.path.join(config.DATA_FOLDER, "mvs_final_dense.ply")
-
-        o3d.io.write_triangle_mesh(dense_model_path, dense_mesh)
-
-        print(f"[MVS] Dense mesh saved at {dense_model_path}")
-
-        o3d.visualization.draw_geometries([dense_mesh])
-    else:
-        print("[MVS] Not enough images found")
+            print("[MVS] Not enough images found")

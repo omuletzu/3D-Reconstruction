@@ -1,4 +1,5 @@
 import cv2
+import config
 import numpy as np
 from geometry3d.ransac import ransac
 from geometry3d.utils import extract_extrinsics_E, get_best_solution
@@ -20,14 +21,7 @@ def geometry_worker(geometry_queue, lock, all_matches):
 
         K = item['K']
 
-        print(f"[GEOMETRY] Ransac for {pair_name}")
-
-        # E, ptsA_filt, ptsB_filt = ransac(ptsA, ptsB, K)
-        # if E is None or ptsA_filt is None or ptsB_filt is None:
-        #     geometry_queue.task_done()
-        #     continue
-        # solutions = extract_extrinsics_E(E)
-        # R_local, t_local = get_best_solution(solutions, ptsA_filt, ptsB_filt, K)
+        print(f"[GEOMETRY] Processing for {pair_name}")
         
         if ptsA is None or len(ptsA) < 8 or ptsB is None or len(ptsB) < 8:
             with lock:
@@ -43,8 +37,25 @@ def geometry_worker(geometry_queue, lock, all_matches):
             K,
             method=cv2.RANSAC, 
             prob=0.999, 
-            threshold=2.5
+            threshold=config.ESSENTIAL_MATRIX_THRESHOLD
         )
+
+        # E, ind_filt = ransac(ptsA, ptsB, K)
+
+        # if E is None or ind_filt is None:
+        #     print(f"[GEOMETRY] FAILED for {pair_name} - E not found")
+
+        #     with lock:
+        #         all_matches[pair_name] = "FAILED"
+            
+        #     geometry_queue.task_done()
+        #     continue
+
+        # ptsA_filt = ptsA[ind_filt]
+        # ptsB_filt = ptsB[ind_filt]
+
+        # idA_filtered = np.array(idA)[ind_filt]
+        # idB_filtered = np.array(idA)[ind_filt]
 
         if E is None or mask is None:
             print(f"[GEOMETRY] FAILED for {pair_name} - E not found")
@@ -83,26 +94,21 @@ def geometry_worker(geometry_queue, lock, all_matches):
         idA_final = idA_filt1[ind_filt]
         idB_final = idB_filt1[ind_filt]
 
-        # E, ind_filt = ransac(ptsA, ptsB, K)
-
-        # if E is None or ind_filt is None:
-        #     print(f"[GEOMETRY] FAILED for {pair_name} - E not found")
-
-        #     with lock:
-        #         all_matches[pair_name] = "FAILED"
-            
-        #     geometry_queue.task_done()
-        #     continue
-
-        # ptsA_filt = ptsA[ind_filt]
-        # ptsB_filt = ptsB[ind_filt]
-
-        # idA_filtered = np.array(idA)[ind_filt]
-        # idB_filtered = np.array(idA)[ind_filt]
-
         # solutions = extract_extrinsics_E(E)
 
         # R_local, t_local = get_best_solution(solutions, ptsA_filt, ptsB_filt, K)
+
+        # with lock:
+        #     all_matches[pair_name] = {
+        #         'ptsA': ptsA_filt,
+        #         'ptsB': ptsB_filt,
+        #         'indicesA': idA_filtered,
+        #         'indicesB': idB_filtered,
+        #         'R_local': R_local,
+        #         't_local': t_local
+        #     }
+
+        # print(f"[GEOMETRY] Done for {pair_name}. Inliers: {len(ptsA_filt)}/{len(ptsA)}")
 
         with lock:
             all_matches[pair_name] = {

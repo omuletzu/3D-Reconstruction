@@ -1,14 +1,14 @@
-import cv2
+import config
 import numpy as np
 import open3d as o3d
 
-def mesh_reconstruction(loaded_images, loaded_images_colored, global_poses, K, global_points_3d):
+def alpha_shapes_reconstruction(global_points_3d, smoothing=False):
 
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(global_points_3d)
     
 
-    cl, ind = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+    _, ind = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
     pcd = pcd.select_by_index(ind)
 
 
@@ -16,11 +16,30 @@ def mesh_reconstruction(loaded_images, loaded_images_colored, global_poses, K, g
     alpha = 0.1
     mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(pcd, alpha)
 
-    # print("[MVS] Taubin Smoothing")
-    # mesh = mesh.filter_smooth_taubin(number_of_iterations=5)
+    if smoothing:
+        print("[MVS] Taubin Smoothing")
+        mesh = mesh.filter_smooth_taubin(number_of_iterations=5)
     
     mesh.compute_vertex_normals()
     
+    return mesh
+
+def poisson_mesh_reconstruction(global_points_3d):
+    pcd = o3d.geometry.PointCloud()
+
+    pcd.points = o3d.utility.Vector3dVector(np.array(global_points_3d))
+
+    pcd.paint_uniform_color([0.8, 0.6, 0.4])
+
+    pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30))
+
+    pcd.orient_normals_consistent_tangent_plane(100)
+
+    mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=9)
+
+    vertices_to_remove = densities < np.quantile(densities, 0.25)
+    mesh.remove_vertices_by_mask(vertices_to_remove)
+
     return mesh
 
 # def mvs_pipeline(loaded_images, loaded_images_colored, global_poses, K, global_points_3d):

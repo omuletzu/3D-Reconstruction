@@ -14,14 +14,15 @@ def matching_worker(model, matching_queue, processed_data, lock, all_matches, ge
 
         print(f"[ML_THREAD] inferring for image {idx}")
 
-        # patches = processed_data[idx]['patches']
+        if config.USE_MODEL_DESCRIPTORS:
+            patches = processed_data[idx]['patches']
 
-        # descriptors = compute_descriptors_for_patches(patches, model)
+            descriptors = compute_descriptors_for_patches(patches, model)
+        else:
+            img = processed_data[idx]['image_gray']
+            keypoints = processed_data[idx]['keypoints']
 
-        img = processed_data[idx]['image_gray']
-        keypoints = processed_data[idx]['keypoints']
-
-        _, descriptors = sift.compute(img, keypoints)
+            _, descriptors = sift.compute(img, keypoints)
 
         with lock:
             processed_data[idx]['descriptors'] = descriptors
