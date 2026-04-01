@@ -12,16 +12,29 @@ def normalize_points(pts, K):
 
     return pts_normalized
 
+def sampson_distance(pts1, pts2, E):
+    line2 = pts1 @ E.T  
+    line1 = pts2 @ E
+
+    numerator = np.sum(pts2 * line2, axis=1) ** 2
+
+    denom = line2[:, 0] ** 2 + line2[:, 1] ** 2 + line1[:, 0] ** 2 + line1[:, 1] ** 2
+
+    eps = 1e-12
+
+    return numerator / (denom + eps)
+
 def eight_points_algorithm(pts1, pts2):
     N = pts1.shape[0]
 
-    A = np.zeros((N, 9))
+    x1, y1 = pts1[:, 0], pts1[:, 1]
+    x2, y2 = pts2[:, 0], pts2[:, 1]
 
-    for i in range(N):
-        x1, y1 = pts1[i, 0], pts1[i, 1]
-        x2, y2 = pts2[i, 0], pts2[i, 1]
-
-        A[i] = [x2 * x1, x2 * y1, x2, y2 * x1, y2 * y1, y2, x1, y1, 1]
+    A = np.column_stack([
+        x2 * x1, x2 * y1, x2, 
+        y2 * x1, y2 * y1, y2, 
+        x1, y1, np.ones(N)
+    ])
 
     _, _, Vt = np.linalg.svd(A)
 
@@ -38,7 +51,13 @@ def eight_points_algorithm(pts1, pts2):
 def ransac(pts1, pts2, K, max_iters=config.RANSAC_MAX_ITERS, threshold=config.RANSAC_THRESHOLD):
     if pts1.shape[0] < 8:
         print(f"[RANSAC] Not enough points ({pts1.shape[0]}). Minimum 8 required.")
-        return None, None, None
+        return None, None
+
+    focal_length = K[0, 0]
+    
+    normalized_threshold = threshold / focal_length
+    
+    threshold_sq = normalized_threshold ** 2
 
     pts1_normalized = normalize_points(pts1, K)
     pts2_normalized = normalize_points(pts2, K)
@@ -57,16 +76,9 @@ def ransac(pts1, pts2, K, max_iters=config.RANSAC_MAX_ITERS, threshold=config.RA
 
         E_current = eight_points_algorithm(pts1_sample, pts2_sample)
 
-        inliers_current = []
+        errors = sampson_distance(pts1_normalized, pts2_normalized, E_current)
 
-        for i in range(N):
-            pt1 = pts1_normalized[i]
-            pt2 = pts2_normalized[i]
-
-            error = np.abs(pt2 @ E_current @ pt1.T)
-
-            if error < threshold:
-                inliers_current.append(i)
+        inliers_current = np.where(errors < threshold_sq)[0]
 
         if len(inliers_current) > max_inliers_count:
             max_inliers_count = len(inliers_current)

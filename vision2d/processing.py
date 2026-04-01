@@ -67,8 +67,6 @@ def remove_background(image):
 
     return result
 
-import cv2
-
 def remove_background_ai(image):
 
     result_rgba = remove(image)
