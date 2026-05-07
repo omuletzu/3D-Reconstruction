@@ -1,15 +1,20 @@
 #include <AccelStepper.h>
 
-#define STEP_PIN 2
-#define DIR_PIN 5
+#define STEP_PIN 4
+#define DIR_PIN 7
+#define EN_PIN 8
 
 AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 
-const int stepsPerMove = 10; 
+const int stepsPerMove = 20; 
 
 void setup() {
-  stepper.setMaxSpeed(500.0);
-  stepper.setAcceleration(250.0);
+  pinMode(EN_PIN, OUTPUT);
+  digitalWrite(EN_PIN, LOW);
+
+  stepper.setMaxSpeed(100.0);
+  
+  stepper.setAcceleration(100.0);
 
   Serial.begin(9600);
 }

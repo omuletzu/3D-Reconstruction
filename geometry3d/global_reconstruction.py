@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import open3d as o3d
 import time
+import matplotlib.pyplot as plt
 from scipy.optimize import least_squares
 from scipy.spatial import KDTree
 from scipy.sparse import lil_matrix
@@ -133,29 +134,11 @@ def initialize_reconstruction(all_matches, K, cam1, cam2):
     if not pair:
         pair = all_matches.get(f"{cam2}_{cam1}")
         
-    pts0, pts1 = pair['ptsA'], pair['ptsB']
-    idx0, idx1 = pair['indicesA'], pair['indicesB']
+    pts0_final, pts1_final = pair['ptsA'], pair['ptsB']
+    idx0_final, idx1_final = pair['indicesA'], pair['indicesB']
 
-    E, mask = cv2.findEssentialMat(pts0, pts1, K, method=cv2.RANSAC, prob=0.999, threshold=config.ESSENTIAL_MATRIX_THRESHOLD)
-    # _, R, t, mask_pose = cv2.recoverPose(E, pts0, pts1, K, mask=mask)
-
-    solutions = extract_extrinsics_E(E)
-
-    mask = mask.ravel() > 0
-
-    pts0_filt1 = pts0[mask]
-    pts1_filt1 = pts1[mask]
-
-    idx0_filt1 = np.array(idx0)[mask]
-    idx1_filt1 = np.array(idx1)[mask]
-
-    R, t, ind_filt = get_best_solution(solutions, pts0_filt1, pts1_filt1, K)
-
-    pts0_final = pts0_filt1[ind_filt]
-    pts1_final = pts1_filt1[ind_filt]
-    
-    idx0_final = idx0_filt1[ind_filt]
-    idx1_final = idx1_filt1[ind_filt]
+    R = pair['R_local']
+    t = pair['t_local']
 
     global_poses = {
         cam1: {'R': np.eye(3), 't': np.zeros((3, 1))},
@@ -180,7 +163,7 @@ def initialize_reconstruction(all_matches, K, cam1, cam2):
 
     global_points_3d = []
     track_map = {} 
-    mask = mask.flatten()
+    # mask = mask.flatten()
     observations = []
 
     # for i in range(len(pts3D)):
@@ -362,8 +345,19 @@ def triangulate_new_points(curr_cam, global_poses, all_matches, track_map, globa
 def attempt_incremental_sfm(camA, camB, all_matches, processed_data, K, dist_coeffs):
     print(f"[SEED] Start reconstruction chaining for {camA} - {camB} cameras")
     
+    t_init_start = time.perf_counter()
+
     global_poses, global_points_3d, track_map, observations = initialize_reconstruction(all_matches, K, camA, camB)
     
+    t_init_end = time.perf_counter()
+
+    metrics = {
+        'init_time': t_init_end - t_init_start,
+        'pnp_triang_time_total': 0.0,
+        'ba_times': [],
+        'ba_time_total': 0.0
+    }
+
     unregistered_cameras = set(range(config.TOTAL_PHOTOS))
     unregistered_cameras.remove(camA)
     unregistered_cameras.remove(camB)
@@ -394,6 +388,9 @@ def attempt_incremental_sfm(camA, camB, all_matches, processed_data, K, dist_coe
         
         for candidate in camera_ranking:
             best_cam = candidate['cam_id']
+
+            t_geom_start = time.perf_counter()
+
             success, rvec, tvec, inliers = estimate_camera_pose(candidate['obj_pts'], candidate['img_pts'], K, dist_coeffs)
 
             if success and inliers is not None and len(inliers) >= 8:
@@ -430,7 +427,12 @@ def attempt_incremental_sfm(camA, camB, all_matches, processed_data, K, dist_coe
 
                 triangulate_new_points(best_cam, global_poses, all_matches, track_map, global_points_3d, K, observations)
 
+                t_geom_end = time.perf_counter()
+                metrics['pnp_triang_time_total'] += (t_geom_end - t_geom_start)
+
                 if len(global_poses) >= 3 and len(global_poses) % 2 == 0:
+                    t_ba_start = time.perf_counter()
+
                     ba_observations = filter_outlier_observations(observations, global_poses, global_points_3d, K)
                     ba_cam_idx = np.array([o[0] for o in ba_observations], dtype=int)
                     ba_pt_idx = np.array([o[1] for o in ba_observations], dtype=int)
@@ -439,17 +441,25 @@ def attempt_incremental_sfm(camA, camB, all_matches, processed_data, K, dist_coe
                     global_points_3d_np, global_poses = run_scipy_bundle_adjustment(
                         global_poses, global_points_3d, ba_cam_idx, ba_pt_idx, ba_pts2d, K
                     )
+
                     global_points_3d = list(global_points_3d_np)
+
+                    t_ba_end = time.perf_counter()
+                    ba_duration = t_ba_end - t_ba_start
+                    metrics['ba_times'].append(ba_duration)
+                    metrics['ba_time_total'] += ba_duration
                 
                 break
             
         if not pnp_success_for_this_round:
             break
 
-    return global_poses, global_points_3d
+    return global_poses, global_points_3d, metrics
 
 
 def global_reconstruction(all_matches, processed_data, K, dist_coeffs=None):
+
+    t_sfm_global_start = time.perf_counter()
 
     seed_ranking = []
 
@@ -468,6 +478,8 @@ def global_reconstruction(all_matches, processed_data, K, dist_coeffs=None):
     best_reconstruction_poses = {}
     best_reconstruction_points = []
 
+    best_metrics = {}
+
     max_cameras_registered = 0
     
     MAX_SEEDS_TO_TRY = 10
@@ -479,7 +491,7 @@ def global_reconstruction(all_matches, processed_data, K, dist_coeffs=None):
             
         camA, camB = map(int, seed['pair_name'].split('_'))
         
-        poses, points = attempt_incremental_sfm(camA, camB, all_matches, processed_data, K, dist_coeffs)
+        poses, points, current_metrics = attempt_incremental_sfm(camA, camB, all_matches, processed_data, K, dist_coeffs)
         
         num_registered = len(poses)
 
@@ -489,6 +501,7 @@ def global_reconstruction(all_matches, processed_data, K, dist_coeffs=None):
             max_cameras_registered = num_registered
             best_reconstruction_poses = poses
             best_reconstruction_points = points
+            best_metrics = current_metrics
             
         if max_cameras_registered >= config.TOTAL_PHOTOS - 2:
             print("Found final cameras for reconstruction")
@@ -496,12 +509,41 @@ def global_reconstruction(all_matches, processed_data, K, dist_coeffs=None):
             
         seeds_tried += 1
 
+    t_sfm_global_end = time.perf_counter()
+    timp_total_sfm = t_sfm_global_end - t_sfm_global_start
+
     print(f"Integrating {max_cameras_registered} cameras")
     
     if max_cameras_registered < 3:
         print("Final fail")
         return
         
+    print("\n==================================================")
+    print("TIMER - SfM")
+    print("==================================================")
+
+    timp_evaluare_seeds = timp_total_sfm - best_metrics.get('pnp_triang_time_total', 0) - best_metrics.get('ba_time_total', 0)
+
+    print(f"1 - Seed evaluation: {timp_evaluare_seeds:.4f} secunde")
+    print(f"2 - Total PnP - Triangulation:   {best_metrics.get('pnp_triang_time_total', 0):.4f} secunde")
+    print(f"3 - Total BA:   {best_metrics.get('ba_time_total', 0):.4f} secunde")
+    print(f"--------------------------------------------------")
+    print(f"Total SfM:              {timp_total_sfm:.4f} secunde")
+    print("==================================================\n")
+
+    ba_times = best_metrics.get('ba_times', [])
+    
+    if len(ba_times) > 0:
+        plt.figure(figsize=(10, 5))
+        plt.plot(range(1, len(ba_times) + 1), ba_times, marker='o', linestyle='-', color='r')
+        plt.title("Evoluția timpului Bundle Adjustment per iterație")
+        plt.xlabel("Iterație BA (la fiecare 2 cadre adăugate)")
+        plt.ylabel("Timp de execuție")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(os.path.join(config.DATA_FOLDER, "ba_performance_graph.png"))
+        print(f"[METRICA] Graficul a fost salvat cu succes în folderul de date: ba_performance_graph.png")
+
     save_to_ply(config.SAVE_POINT_CLOUD_PATH, best_reconstruction_points, best_reconstruction_poses)
 
     pcd = o3d.geometry.PointCloud()

@@ -25,7 +25,7 @@ class Camera:
         objpoints = [] 
         imgpoints = []
 
-        images = glob.glob('data/calibration_data/*.jpg')
+        images = glob.glob(f"{config.CALIBRATION_PATH}*.jpg")
         
         if not images:
             print("[CALIBRATION] Folder not found")

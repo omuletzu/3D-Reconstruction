@@ -5,3 +5,4 @@ numpy
 matplotlib
 kagglehub
 open3d
+rembg

@@ -3,8 +3,8 @@ import os
 # PATHS
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-DATA_FOLDER = os.path.join(BASE_DIR, 'data', 'dino_ring_dataset')
-CALIBRATION_FILE = os.path.join(BASE_DIR, 'data', 'camera_params_dino.json')
+DATA_FOLDER = os.path.join(BASE_DIR, 'data', 'temple_ring_dataset')
+CALIBRATION_FILE = os.path.join(BASE_DIR, 'data', 'camera_params_temple.json')
 MODEL_PATH = os.path.join(BASE_DIR, 'ml_matching', 'feature-descriptor.keras')
 SAVE_POINT_CLOUD_PATH = os.path.join(DATA_FOLDER, 'point_cloud.ply')
 SAVE_MESH_PATH = os.path.join(DATA_FOLDER, 'mesh.ply')
@@ -12,28 +12,31 @@ CACHE_PATH = "sfm_data_cache.pkl"
 
 # HARDWARE
 ARDUINO_PORT = 'COM3'
-CAMERA_INDEX = 'http://10.247.131.204:8080/video'
-TOTAL_PHOTOS = 48
+CAMERA_INDEX = 2
+TOTAL_PHOTOS = 46
 SKIP_PHOTO_ACQUISITION = True
 
 # DATASET AND IMAGES
 DATA_FOLDER_IMAGES_EXTENSION = 'png'
 
-DATA_FOLDER_IMAGES_PREFIX = "dinoR"
+DATA_FOLDER_IMAGES_PREFIX = "templeR"
+
+CALIBRATION_PATH = './calibration_images/'
 
 ORIGINAL_WIDTH = 640
 ORIGINAL_HEIGHT = 480
-PIPELINE_WIDTH = 480
-MAX_WIDTH_CALIBRATION = 640
+PIPELINE_WIDTH = 640
+MAX_WIDTH_CALIBRATION = 480
 
 # PIPELINE SWITCHES
 USE_MODEL_DESCRIPTORS = False
-COMPUTE_MVS = True
+USE_MANUAL_RANSAC = False
+COMPUTE_MVS = False
 USE_ALPHA_SHAPES = True
 USE_CACHE = False
 
 # FEATURE MATCHING AND ML
-LOWE_VALUE = 0.8
+LOWE_VALUE = 0.7
 MAX_MATCHES = 7500
 MATCH_WINDOW_SIZE = 4
 
@@ -42,7 +45,7 @@ BATCH_SIZE = 32
 
 # GEOMETRY AND MANUAL RANSAC
 ESSENTIAL_MATRIX_THRESHOLD = 1.5
-RANSAC_THRESHOLD = 0.0025
+RANSAC_THRESHOLD = 2.0
 RANSAC_MAX_ITERS = 1000
 
 # MULTI-THREADING WORKERS

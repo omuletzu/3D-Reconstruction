@@ -37,7 +37,7 @@ def poisson_mesh_reconstruction(global_points_3d):
 
     mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=9)
 
-    vertices_to_remove = densities < np.quantile(densities, 0.25)
+    vertices_to_remove = densities < np.quantile(densities, 0.125)
     mesh.remove_vertices_by_mask(vertices_to_remove)
 
     return mesh

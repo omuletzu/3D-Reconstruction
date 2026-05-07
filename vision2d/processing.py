@@ -16,21 +16,29 @@ def resize_image(image, target_width):
 
     return resized_image
 
+# def fix_distorsion(image, K, D):
+#     h, w = image.shape[:2]
+
+#     new_camera_mtx, roi = cv2.getOptimalNewCameraMatrix(K, D, (w, h), 1, (w, h))
+
+#     dst = cv2.undistort(image, K, D, None, new_camera_mtx)
+
+#     x, y, w_roi, h_roi = roi
+#     dst = dst[y : y + h_roi, x : x + w_roi]
+
+#     final_K = new_camera_mtx.copy()
+#     final_K[0, 2] -= x
+#     final_K[1, 2] -= y
+
+#     return dst, final_K
+
 def fix_distorsion(image, K, D):
-    h, w = image.shape[:2]
-
-    new_camera_mtx, roi = cv2.getOptimalNewCameraMatrix(K, D, (w, h), 1, (w, h))
-
-    dst = cv2.undistort(image, K, D, None, new_camera_mtx)
-
-    x, y, w_roi, h_roi = roi
-    dst = dst[y : y + h_roi, x : x + w_roi]
-
-    final_K = new_camera_mtx.copy()
-    final_K[0, 2] -= x
-    final_K[1, 2] -= y
-
-    return dst, final_K
+    # Aplicăm corecția de distorsiune direct, păstrând dimensiunea 
+    # și matricea K exact așa cum le-a calculat calibrarea.
+    dst = cv2.undistort(image, K, D)
+    
+    # Returnăm imaginea corectată și matricea K originală, nealterată
+    return dst, K
 
 def enhance_contrast(image):
     if len(image.shape) == 3:

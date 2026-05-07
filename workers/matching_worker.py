@@ -1,8 +1,11 @@
 import config
 import cv2
+import os
+import time
+import numpy as np
 from ml_matching.inference import compute_descriptors_for_patches, match_images
 
-def matching_worker(model, matching_queue, processed_data, lock, all_matches, geometry_queue):
+def matching_worker(model, matching_queue, processed_data, lock, all_matches, geometry_queue, thread_metrics):
 
     sift = cv2.SIFT_create()
 
@@ -13,6 +16,8 @@ def matching_worker(model, matching_queue, processed_data, lock, all_matches, ge
             break
 
         print(f"[ML_THREAD] inferring for image {idx}")
+
+        start_match_timer = time.perf_counter()
 
         if config.USE_MODEL_DESCRIPTORS:
             patches = processed_data[idx]['patches']
@@ -74,5 +79,11 @@ def matching_worker(model, matching_queue, processed_data, lock, all_matches, ge
                 })
 
                 print(f"[MATCHING] Done for {pair_name}")
+
+        end_match_timer = time.perf_counter()
+
+        with lock:
+            thread_metrics['match_time_sum'] += end_match_timer - start_match_timer
+            thread_metrics['match_count'] += 1
 
         matching_queue.task_done()

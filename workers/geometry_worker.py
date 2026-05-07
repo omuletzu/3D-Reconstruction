@@ -1,10 +1,13 @@
 import cv2
 import config
+import os
+import time
 import numpy as np
 from geometry3d.ransac import ransac
 from geometry3d.utils import extract_extrinsics_E, get_best_solution
 
-def geometry_worker(geometry_queue, lock, all_matches):
+def geometry_worker(geometry_queue, lock, all_matches, thread_metrics):
+
     while True:
         item = geometry_queue.get()
 
@@ -13,6 +16,8 @@ def geometry_worker(geometry_queue, lock, all_matches):
 
         pair_name = item['pair_name']
         
+        start_geo_img = time.perf_counter()
+
         ptsA = np.float32(item['ptsA'])
         ptsB = np.float32(item['ptsB'])
 
@@ -71,7 +76,12 @@ def geometry_worker(geometry_queue, lock, all_matches):
         idA_final = idA_filt1[ind_filt]
         idB_final = idB_filt1[ind_filt]
 
+        end_geo_img = time.perf_counter()
+
         with lock:
+            thread_metrics['geo_time_sum'] += end_geo_img - start_geo_img
+            thread_metrics['geo_count'] += 1
+
             all_matches[pair_name] = {
                 'ptsA': ptsA_final,
                 'ptsB': ptsB_final,

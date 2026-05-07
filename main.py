@@ -8,6 +8,8 @@ import json
 import numpy as np
 import pickle
 import cv2
+import sys
+from logger import DualLogger
 from hardware.camera import Camera
 from hardware.stepper import ArduinoController
 from ml_matching.inference import load_model
@@ -31,7 +33,23 @@ def deserialize_keypoints(kp_data):
     return [cv2.KeyPoint(x=d[0], y=d[1], size=d[2], angle=d[3], response=d[4], octave=d[5], class_id=d[6]) for d in kp_data]
 
 def main():
+    start_total_time = time.perf_counter()
+
     global processed_data, all_matches
+
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    log_filename = os.path.join(config.DATA_FOLDER, f"run_log_{timestamp}.txt")
+    
+    sys.stdout = DualLogger(log_filename)
+
+    thread_metrics = {
+        'prep_time_sum': 0.0,
+        'prep_count': 0,
+        'match_time_sum': 0.0,
+        'match_count': 0,
+        "geo_time_sum": 0.0,
+        "geo_count": 0
+    }
 
     if not os.path.exists(config.DATA_FOLDER):
         os.makedirs(config.DATA_FOLDER)
@@ -58,7 +76,7 @@ def main():
         if "distortion_params" in cam_data:
             dist_coeffs = np.array(cam_data["distortion_params"], dtype=np.float32).reshape(-1, 1)
 
-    model = load_model(config.MODEL_PATH)
+    # model = load_model(config.MODEL_PATH)
 
     preprocessing_threads = []
     matching_threads = []
@@ -92,25 +110,27 @@ def main():
 
         for _ in range(config.PREPROCESSING_THREADS_NR):
             t = threading.Thread(target=preprocessing_worker,
-                                args=(preprocessing_queue, lock, processed_data, matching_queue, K_scaled, dist_coeffs))
+                                args=(preprocessing_queue, lock, processed_data, matching_queue, K_scaled, dist_coeffs, thread_metrics))
             t.start()
             preprocessing_threads.append(t)
 
         for _ in range(config.ML_THREADS_NR):
             t = threading.Thread(target=matching_worker, 
-                                args=(model, matching_queue, processed_data, lock, all_matches, geometry_queue))
+                                args=(model, matching_queue, processed_data, lock, all_matches, geometry_queue, thread_metrics))
             t.start()
             matching_threads.append(t)
 
         for _ in range(config.GEOMETRY_THREADS_NR):
             t = threading.Thread(target=geometry_worker, 
-                                args=(geometry_queue, lock, all_matches))
+                                args=(geometry_queue, lock, all_matches, thread_metrics))
             t.start()
             geometry_threads.append(t)
 
     time.sleep(2)
 
     try:
+        start_proc_parallel = time.perf_counter()
+
         if not (config.USE_CACHE and os.path.exists(config.CACHE_PATH)):
             print("Started photo scanning")
 
@@ -128,7 +148,7 @@ def main():
 
                         image = camera.captura_frame()
 
-                        if image:
+                        if image is not None:
                             image_file_path = os.path.join(config.DATA_FOLDER, f"{config.DATA_FOLDER_IMAGES_PREFIX}{(i + 1):04d}.{config.DATA_FOLDER_IMAGES_EXTENSION}")
 
                             cv2.imwrite(image_file_path, image)
@@ -147,6 +167,18 @@ def main():
             matching_queue.join()
             geometry_queue.join()
 
+            end_proc_parallel = time.perf_counter()
+
+            print(f"[MAIN] Average preprocessing time {thread_metrics['prep_time_sum'] / thread_metrics['prep_count']}")
+
+            print(f"[MAIN] Average matching time {thread_metrics['match_time_sum'] / thread_metrics['match_count']}")
+
+            print(f"[MAIN] Average geometry time {thread_metrics['geo_time_sum'] / thread_metrics['geo_count']}")
+
+            print(f"[MAIN] Total parallel workers time {end_proc_parallel - start_proc_parallel}")
+
+            print("[MAIN] Saving cache...")
+
             save_ready_processed_data = {}
 
             for idx, data in processed_data.items():
@@ -164,9 +196,16 @@ def main():
             with open(config.CACHE_PATH, "wb") as f:
                 pickle.dump(data_to_save, f)
 
+        else:
+            print("[MAIN] Using cache, skipping acquisition...")
+
         K_for_SfM = processed_data[0]['K']
 
         global_reconstruction(all_matches, processed_data, K_for_SfM, dist_coeffs)
+
+        end_total_time = time.perf_counter()
+
+        print(f"[MAIN] Total final time {end_total_time - start_total_time}")
 
     finally:
         for q, threads in [(preprocessing_queue, preprocessing_threads), 
